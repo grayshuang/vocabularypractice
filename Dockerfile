@@ -12,9 +12,8 @@ RUN cd frontend && npm install && npx vite build
 COPY backend-v2/package*.json ./backend/
 RUN cd backend && npm install --omit=dev
 
-# 3) 复制源码与前端构建产物
+# 3) 复制源码（前端 dist 已在第 9 行构建于镜像内，无需从上下文拷贝）
 COPY backend-v2/ ./backend/
-COPY frontend/dist/ ./frontend/dist/
 
 WORKDIR /app/backend
 ENV PORT=3000

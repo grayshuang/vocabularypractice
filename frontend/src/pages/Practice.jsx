@@ -1292,7 +1292,7 @@ export default function Practice() {
 
   useEffect(() => {
     if (!roomCode) { navigate('/'); return; }
-    if (!getToken()) { navigate('/login'); return; }
+    if (!getToken()) { navigate('/student'); return; }
     loadPractice();
     // eslint-disable-next-line
   }, [roomCode]);

@@ -35,7 +35,7 @@ export default function Register() {
           : await api.teacherLogin({ username, password });
         if (loginRes.token) {
           setAuth(loginRes.token, loginRes.student || loginRes.teacher, role === 'student' ? 'student' : 'teacher');
-          navigate(role === 'student' ? '/' : '/dashboard');
+          navigate(role === 'student' ? '/student' : '/teacher');
         }
       }
     } catch (err) {
@@ -93,7 +93,7 @@ export default function Register() {
           </button>
         </form>
         <p className="mt-4 text-center text-sm text-gray-600">
-          已有账号？<a href="/login" className="text-indigo-600 hover:text-indigo-800">登录</a>
+          已有账号？<a href={role === 'teacher' ? '/teacher' : '/student'} className="text-indigo-600 hover:text-indigo-800">登录</a>
         </p>
       </div>
     </div>

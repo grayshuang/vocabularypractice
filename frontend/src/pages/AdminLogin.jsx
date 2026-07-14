@@ -43,7 +43,7 @@ export default function AdminLogin() {
           </button>
         </form>
         <p className="mt-4 text-center text-sm text-gray-600">
-          <a href="/login" className="text-red-600 hover:text-red-800">← 返回普通登录</a>
+          <a href="/teacher" className="text-red-600 hover:text-red-800">← 返回教师登录</a>
         </p>
       </div>
     </div>

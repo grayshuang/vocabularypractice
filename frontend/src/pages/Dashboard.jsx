@@ -276,7 +276,7 @@ export default function Dashboard() {
 
   function handleLogout() {
     logout();
-    navigate('/login');
+    window.location.href = '/teacher';
   }
 
   function goToRoom(roomCode) {

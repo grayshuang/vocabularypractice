@@ -153,7 +153,7 @@ export default function RoomDashboard() {
     try {
       await api.deleteRoom(roomCode);
       alert('房间已删除');
-      navigate('/dashboard');
+      navigate('/teacher');
     } catch (err) {
       setError('删除失败');
     }
@@ -161,7 +161,7 @@ export default function RoomDashboard() {
 
   function handleLogout() {
     logout();
-    navigate('/login');
+    window.location.href = '/teacher';
   }
 
   if (loading) return <div className="min-h-screen flex items-center justify-center">加载中...</div>;
@@ -179,7 +179,7 @@ export default function RoomDashboard() {
       <nav className="bg-white shadow-sm">
         <div className="max-w-6xl mx-auto px-4 py-3 flex justify-between items-center">
           <div className="flex items-center gap-4">
-            <button onClick={() => navigate('/dashboard')} className="text-indigo-600 hover:text-indigo-800">← 返回</button>
+            <button onClick={() => navigate('/teacher')} className="text-indigo-600 hover:text-indigo-800">← 返回</button>
             <h1 className="text-xl font-bold text-indigo-700">房间 #{roomCode} 统计</h1>
           </div>
           <button onClick={handleLogout} className="text-sm text-red-600 hover:text-red-800">退出</button>

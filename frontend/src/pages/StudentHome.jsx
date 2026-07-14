@@ -24,7 +24,7 @@ export default function StudentHome() {
 
   useEffect(() => {
     if (!isLoggedIn()) {
-      navigate('/login');
+      navigate('/student');
       return;
     }
     // 从localStorage读取学生信息
@@ -52,7 +52,7 @@ export default function StudentHome() {
 
   const handleLogout = () => {
     logout();
-    navigate('/login');
+    window.location.href = '/student';
   };
 
   const loadJoinedRooms = async () => {
