@@ -1,0 +1,17 @@
+# Render.com 一键部署配置（免费套餐，无需信用卡）
+# 在 Render 后台 New → Web Service → 连接 GitHub 仓库后，
+# 选择 "Runtime: Docker"，Render 会自动读取本文件。
+services:
+  - type: web
+    name: vocab-practice
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DASHSCOPE_API_KEY
+        sync: false

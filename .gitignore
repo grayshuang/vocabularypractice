@@ -1,0 +1,18 @@
+# 依赖
+backend-v2/node_modules/
+frontend/node_modules/
+
+# 前端构建产物（部署时由 CI/Docker 重新构建）
+frontend/dist/
+
+# 运行时数据库（含隐私数据，不入库；部署后由 initDB 自动重建空库）
+backend-v2/db.json
+backend-v2/*.log
+
+# 环境变量
+.env
+.env.local
+
+# 系统
+.DS_Store
+.git

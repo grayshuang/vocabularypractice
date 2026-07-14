@@ -1,0 +1,7 @@
+backend-v2/node_modules
+frontend/node_modules
+backend-v2/db.json
+backend-v2/*.log
+.git
+.gitignore
+**/.vite
