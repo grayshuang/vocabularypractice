@@ -490,11 +490,20 @@ export default function Dashboard() {
                         className={'p-4 border-2 rounded-lg cursor-pointer transition ' + (selectedModes.includes(mode.id) ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:border-indigo-300')}
                       >
                         <div className="flex items-center gap-3">
-                          <div className={'w-5 h-5 rounded border-2 flex items-center justify-center ' + (selectedModes.includes(mode.id) ? 'border-indigo-500 bg-indigo-500' : 'border-gray-300')}>
+                          <div className={'w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 ' + (selectedModes.includes(mode.id) ? 'border-indigo-500 bg-indigo-500' : 'border-gray-300')}>
                             {selectedModes.includes(mode.id) && <span className="text-white text-xs">✓</span>}
                           </div>
                           <span className="font-medium text-gray-800">{mode.label}</span>
+                          {mode.usesBuiltinBank && (
+                            <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200 whitespace-nowrap">内置题库</span>
+                          )}
                         </div>
+                        {mode.usesBuiltinBank && (
+                          <p className="text-xs text-amber-600 mt-2 ml-8 flex items-start gap-1">
+                            <span>⚠️</span>
+                            <span>{mode.bankNote}</span>
+                          </p>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -505,6 +514,19 @@ export default function Dashboard() {
               {step === 3 && (
                 <div>
                   <h3 className="text-lg font-bold text-gray-800 mb-4">③ 分配词汇到练习方式</h3>
+
+                  {/* 内置题库模式提醒：这些模式不使用所给词汇表，无需分配 */}
+                  {selectedModes.some(id => MODES.find(m => m.id === id)?.usesBuiltinBank) && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+                      <p className="text-sm font-medium text-amber-700 mb-1">⚠️ 以下练习形式使用系统内置题库，无需分配词汇：</p>
+                      <ul className="text-xs text-amber-600 space-y-0.5 ml-1">
+                        {selectedModes.filter(id => MODES.find(m => m.id === id)?.usesBuiltinBank).map(id => {
+                          const mode = MODES.find(m => m.id === id);
+                          return <li key={id}>· {mode.label}：{mode.bankNote}</li>;
+                        })}
+                      </ul>
+                    </div>
+                  )}
 
                   {/* 重复分配开关 */}
                   <div className="bg-gray-50 p-4 rounded-lg mb-4 flex items-center justify-between">
