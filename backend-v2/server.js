@@ -1396,5 +1396,21 @@ if (fs.existsSync(distDir)) {
 
 // ==================== 启动服务器 ====================
 
-initDB();
-app.listen(PORT, '0.0.0.0', () => console.log(`服务器运行在 http://0.0.0.0:${PORT}`));
+(async () => {
+  try {
+    await initDB();
+    // 启动后立即验证 PG 模式是否生效
+    const { isPG } = require('./database');
+    if (isPG()) {
+      console.log('🔑 数据持久化模式: ✅ PostgreSQL（推送代码不会丢失数据）');
+      console.log('   DATABASE_URL:', process.env.DATABASE_URL ? '已配置 (长度:' + process.env.DATABASE_URL.length + ')' : '❌ 未配置！');
+    } else {
+      console.log('🔑 数据持久化模式: ⚠️ JSON 文件模式（Railway 部署会丢失数据！）');
+      console.log('   原因: DATABASE_URL 未设置 或 PostgreSQL 连接失败');
+      console.log('   请检查 Railway Variables 中是否正确设置了 DATABASE_URL');
+    }
+  } catch(e) {
+    console.error('数据库初始化失败:', e.message);
+  }
+  app.listen(PORT, '0.0.0.0', () => console.log(`服务器运行在 http://0.0.0.0:${PORT}`));
+})();
