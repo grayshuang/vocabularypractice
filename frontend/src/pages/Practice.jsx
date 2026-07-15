@@ -379,7 +379,7 @@ function OptionGrid({ q, selectedWord, isCorrect, onSelect }) {
         return (
           <button key={i} onClick={() => onSelect(opt)} disabled={isCorrect !== null} className={'py-2.5 px-3 ' + cls}>
             <span className="text-gray-300 mr-1.5 text-xs">{String.fromCharCode(65 + i)}.</span><span className="font-medium">{opt}</span>
-            {selectedWord !== null && <div className="text-[10px] mt-1 opacity-70">{(q.option_defs && q.option_defs[i]) ? (isRight ? '✓ ' : '') + q.option_defs[i] : ''}</div>}
+            {isCorrect !== null && <div className="text-[10px] mt-1 opacity-70">{(q.option_defs && q.option_defs[i]) ? (isRight ? '✓ ' : '') + q.option_defs[i] : ''}</div>}
           </button>
         );
       })}
