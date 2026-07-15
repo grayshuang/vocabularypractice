@@ -40,7 +40,10 @@ export default function TeacherLogin({ onSuccess }) {
             {loading ? '登录中...' : '登录'}
           </button>
         </form>
-        <p className="mt-4 text-center text-xs text-gray-400">
+        <p className="mt-4 text-center text-sm text-gray-600">
+          还没有账号？<Link to="/register" className="text-indigo-600 hover:text-indigo-800">注册</Link>
+        </p>
+        <p className="mt-2 text-center text-xs text-gray-400">
           <Link to="/admin/login" className="hover:text-red-600">管理员入口 →</Link>
         </p>
       </div>
