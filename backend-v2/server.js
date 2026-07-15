@@ -324,7 +324,7 @@ ${levelBlock}
 4. 必须正确判断并使用该词的词性（adj/v/n/adv/phrase），确保语法完全正确
 5. 干扰项必须与正确答案词性相同、难度相当、但意思不同
 6. chinese 字段必须是对应英文句子的**完整中文翻译**（逐字对应级别），要涵盖英文句子中的**每一个**信息点，不能省略任何从句、修饰语或细节。学生需要靠中文理解整句英文的全部含义。
-7. 句子（含空白标记 ______，空白计 1 个词）总长度必须控制在 15 个单词以内，超长请在逗号或连词处精简，保持原意与语法正确，避免冗长从句导致练习时网格过大
+7. 句子（含空白标记 ______，空白计 1 个词）总长度建议控制在 25 个单词以内，允许适度使用雅思常见复杂句型（让步状语从句、定语从句、分词结构等），但避免过于冗长的嵌套从句链
 
 【字段说明】
 - word: 词汇
@@ -394,8 +394,8 @@ ${JSON.stringify(wordBatch)}
       throw new Error('AI返回数据格式错误');
     }
 
-    // 限制原句长度：含空白计 1 词，最长 15 词（词格找句网格不至于过大）
-    questions.forEach(q => { if (q && q.sentence) q.sentence = truncateSentence(q.sentence, 15); });
+  // 限制原句长度：含空白计 1 词，最长 28 词（雅思复杂句型需要足够长度表达完整语义）
+  questions.forEach(q => { if (q && q.sentence) q.sentence = truncateSentence(q.sentence, 28); });
 
     console.log(`批次 ${batchIndex + 1} AI生成成功，题目数：`, questions.length);
     return questions;
@@ -419,7 +419,7 @@ function generateFallback(words, level, batchIndex) {
 
     const templateBank = FALLBACK_TEMPLATES[pos] || FALLBACK_TEMPLATES.n;
     const tmpl = templateBank[(i + batchIndex * BATCH_SIZE) % templateBank.length];
-    const sentence = truncateSentence(tmpl.t.replace('{w}', '________'), 15);
+    const sentence = truncateSentence(tmpl.t.replace('{w}', '________'), 28);
     const chinese = tmpl.c.replace('{w}', word);
 
     // 从同批其他词中取干扰项
@@ -574,7 +574,8 @@ function ensureBlank(sentence, word) {
 }
 
 // 截断原句：最长 maxWords 个单词（空白 ______ 计 1 个词），超长则从较长一侧在逗号/连词处自然切断，且保留空白
-function truncateSentence(sentence, maxWords = 15) {
+// 雅思Part3复杂句通常15-30词，默认28词上限保证语义完整
+function truncateSentence(sentence, maxWords = 28) {
   if (!sentence || typeof sentence !== 'string') return sentence;
   const words = sentence.trim().split(/\s+/).filter(Boolean);
   const isBlank = w => /_{4,}/.test(w);
@@ -634,7 +635,7 @@ function applyWordCase(bankItem, originalWord) {
   }
   // 补挖空 + 重新打乱选项（含释义同步）
   item.sentence = ensureBlank(item.sentence || '', item.correct_answer);
-  item.sentence = truncateSentence(item.sentence, 15);
+  item.sentence = truncateSentence(item.sentence, 28);
   return shuffleQuestion(item);
 }
 
