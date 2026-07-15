@@ -1665,11 +1665,18 @@ export default function Practice() {
     finally { setDictLoading(false); }
   };
 
+  // 去除字符串末尾的中文/词性标注（后端已清洗，前端再做一次安全网）
+  const stripChinese = (s) => {
+    if (typeof s !== 'string') return s;
+    return s.replace(/\s*(?:adj\.?|v\.?|n\.?|adv\.?|phrase\.?)\s*[\u4e00-\u9fff\u3400-\u4dbf][\u4e00-\u9fff\s（）()""''「」【】、。！？：；—…·]*$/, '').trim()
+           .replace(/^[""\s]+|[""\s]+$/g, '').trim() || s;
+  };
+
   const defChoices = useMemo(() => {
     if (!currentQuestion) return [];
     return (currentQuestion.options || []).map((opt, i) => ({
-      word: opt,
-      def: (currentQuestion.option_defs && currentQuestion.option_defs[i]) || `"${opt}"`,
+      word: stripChinese(opt),
+      def: stripChinese((currentQuestion.option_defs && currentQuestion.option_defs[i]) || `"${opt}"`),
     }));
   }, [currentQuestion]);
 
@@ -2028,7 +2035,7 @@ export default function Practice() {
               {activeMode === 'synonym' && (
                 <>
                   <p className="text-[11px] text-indigo-500 mb-1">同义替换 · 选出正确的释义</p>
-                  <p className="text-2xl font-bold text-gray-800 mb-4">{q.word}</p>
+                  <p className="text-2xl font-bold text-gray-800 mb-4">{stripChinese(q.word)}</p>
                   <div className="grid grid-cols-1 gap-2">
                     {defChoices.map((c, i) => {
                       let cls = 'border rounded-lg text-left transition text-sm px-3 py-2.5 ';

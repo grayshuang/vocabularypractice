@@ -325,18 +325,19 @@ ${levelBlock}
 5. 干扰项必须与正确答案词性相同、难度相当、但意思不同
 6. chinese 字段必须是对应英文句子的**完整中文翻译**（逐字对应级别），要涵盖英文句子中的**每一个**信息点，不能省略任何从句、修饰语或细节。学生需要靠中文理解整句英文的全部含义。
 7. 句子（含空白标记 ______，空白计 1 个词）总长度建议控制在 25 个单词以内，允许适度使用雅思常见复杂句型（让步状语从句、定语从句、分词结构等），但避免过于冗长的嵌套从句链
+8. **以下字段绝对禁止包含任何中文字符**：word、options、correct_answer、definition、option_defs。这些字段必须100%纯英文。只有 chinese 字段可以包含中文。
 
 【字段说明】
-- word: 词汇
+- word: **纯英文词汇**（仅英文单词，禁止包含中文、词性标注或释义）
 - pos: 词性 (adj/n/v/adv/phrase)
 - sentence: 含______的完整句子
-- options: [正确答案, 干扰项1, 干扰项2, 干扰项3] 共4个
-- correct_answer: 正确答案
+- options: [正确答案, 干扰项1, 干扰项2, 干扰项3] 共4个（每个仅英文单词）
+- correct_answer: 正确答案（仅英文单词）
 - topic_category: 雅思话题类别（从以下选一个）：教育类/科技类/环境类/社会类/政府类/文化类/健康类/工作类/媒体类/犯罪类/全球化类/城市化类
 - thinking_tag: 思路标签（从以下选一个）：人际/身心/学习/经济/效率/环境/科技/减压/好恶/性格/能力/规划
 - template: 逻辑句型模板（如 "While it's universally believed that..., I'd rather say..."）
-- definition: 英文简单短释义（5-10个单词）
-- option_defs: 与 options 顺序严格对应的每个词的英文简单短释义数组（长度必须等于 options 长度）；第1个是正确答案释义，其余是干扰项释义，便于学生查看所有词汇释义
+- definition: **纯英文**简单短释义（5-10个单词，禁止包含任何中文字符）
+- option_defs: 与 options 顺序严格对应的每个词的**纯英文**简单短释义数组（长度必须等于 options 长度）；第1个是正确答案释义，其余是干扰项释义；**绝对禁止包含任何中文字符**
 - chinese: 中文翻译
 
 【词汇列表】
@@ -396,6 +397,23 @@ ${JSON.stringify(wordBatch)}
 
   // 限制原句长度：含空白计 1 词，最长 28 词（雅思复杂句型需要足够长度表达完整语义）
   questions.forEach(q => { if (q && q.sentence) q.sentence = truncateSentence(q.sentence, 28); });
+
+    // 安全清洗：确保 word/options/correct_answer/definition/option_defs 不含中文（AI 偶尔会在这些字段混入中文/词性标注）
+    const CHINESE_RE = /[\u4e00-\u9fff\u3400-\u4dbf]/;
+    const stripChinese = (s) => {
+      if (typeof s !== 'string') return s;
+      // 去掉中文及前后可能附着的 "adj./v./n./adv./phrase" 标注和多余空白
+      return s.replace(/\s*(?:adj\.?|v\.?|n\.?|adv\.?|phrase\.?)\s*[\u4e00-\u9fff\u3400-\u4dbf][\u4e00-\u9fff\s（）()""''「」【】、。！？：；—…·]*$/, '').trim()
+             .replace(/^[""\s]+|[""\s]+$/g, '').trim() || s;
+    };
+    questions.forEach(q => {
+      if (!q) return;
+      if (q.word) q.word = stripChinese(q.word);
+      if (q.correct_answer) q.correct_answer = stripChinese(q.correct_answer);
+      if (q.definition) q.definition = stripChinese(q.definition);
+      if (Array.isArray(q.options)) q.options = q.options.map(stripChinese);
+      if (Array.isArray(q.option_defs)) q.option_defs = q.option_defs.map(stripChinese);
+    });
 
     console.log(`批次 ${batchIndex + 1} AI生成成功，题目数：`, questions.length);
     return questions;
