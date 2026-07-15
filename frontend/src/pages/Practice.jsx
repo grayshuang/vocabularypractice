@@ -1883,12 +1883,13 @@ export default function Practice() {
             <button onClick={() => navigate('/history')} className="flex-1 text-xs bg-gray-800 text-white py-2.5 rounded hover:bg-gray-700">查看历史</button>
             <button onClick={() => navigate('/')} className="flex-1 text-xs border border-gray-300 text-gray-700 py-2.5 rounded hover:bg-gray-50">返回首页</button>
           </div>
-          <div className="grid grid-cols-2 gap-2 pb-4">
-            <button onClick={() => restartPractice(false)} className="text-xs bg-indigo-600 text-white py-2.5 rounded-lg hover:bg-indigo-700">🔄 全部重练</button>
+          <div className="grid grid-cols-2 gap-2 pb-1">
+            <button onClick={() => restartPractice(false)} className="text-xs bg-indigo-600 text-white py-2.5 rounded-lg hover:bg-indigo-700">🔄 换一批新题</button>
             {results.some(r => !r.is_correct) && (
               <button onClick={() => restartPractice(true)} className="text-xs bg-amber-500 text-white py-2.5 rounded-lg hover:bg-amber-600">⚠️ 重练错题 ({results.filter(r => !r.is_correct).length})</button>
             )}
           </div>
+          <p className="text-[11px] text-gray-400 text-center pb-4">内置题库每次都会从词库随机抽取不同题目；点「换一批新题」可立即重新出题</p>
         </div>
       </div>
       </ResultErrorBoundary>
