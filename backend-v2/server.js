@@ -1305,14 +1305,14 @@ app.get('/api/teacher/room/:roomId/students', authMiddleware, (req, res) => {
   const db = readDB();
   const roomId = parseInt(req.params.roomId);
   // 合并：正式加入的学生 + 有过练习记录但没点加入的学生（去重）
-  const joinedIds = db.studentRooms.filter(sr => sr.room_id === roomId).map(sr => sr.student_id);
+  const joinedIds = db.studentRooms.filter(sr => Number(sr.room_id) === roomId).map(sr => sr.student_id);
   const practiceIds = db.practiceSessions
     .filter(ps => Number(ps.room_id) === roomId)
     .map(ps => ps.student_id)
     .filter(id => !joinedIds.includes(id));
   const studentIds = [...new Set([...joinedIds, ...practiceIds])];
   const students = db.students.filter(s => studentIds.includes(s.id)).map(s => {
-    const sessions = db.practiceSessions.filter(ps => ps.student_id === s.id && ps.room_id === roomId);
+    const sessions = db.practiceSessions.filter(ps => ps.student_id === s.id && Number(ps.room_id) === roomId);
     const finishedSessions = sessions.filter(ps => ps.finished_at);
     const totalQ = sessions.reduce((a, b) => a + (b.total_questions || 0), 0);
     const totalC = sessions.reduce((a, b) => a + (b.correct_count || 0), 0);
@@ -1332,7 +1332,7 @@ app.get('/api/teacher/room/:roomId/student/:studentId/details', authMiddleware, 
   const db = readDB();
   const roomId = parseInt(req.params.roomId);
   const studentId = parseInt(req.params.studentId);
-  const sessions = db.practiceSessions.filter(ps => ps.student_id === studentId && ps.room_id === roomId && ps.finished_at);
+  const sessions = db.practiceSessions.filter(ps => ps.student_id === studentId && Number(ps.room_id) === roomId && ps.finished_at);
   const result = sessions.map(s => {
     const answers = db.practiceAnswers
       .filter(a => a.session_id === s.id)
@@ -1364,7 +1364,7 @@ app.get('/api/teacher/room/:roomId/word-stats', authMiddleware, (req, res) => {
   // 验证房间属于该教师
   const room = db.rooms.find(r => r.id === roomId);
   if (!room || room.teacher_id !== req.user.id) return res.status(403).json({ error: '无权限' });
-  res.json(db.wordStats.filter(ws => ws.room_id === roomId).sort((a, b) => b.error_rate - a.error_rate));
+  res.json(db.wordStats.filter(ws => Number(ws.room_id) === roomId).sort((a, b) => b.error_rate - a.error_rate));
 });
 
 // ==================== 管理员功能 ====================
