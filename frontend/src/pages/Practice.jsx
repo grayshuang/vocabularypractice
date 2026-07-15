@@ -358,20 +358,26 @@ function generateLookalikeGrid(target, confusers) {
   return { grid, size, total: tCount };
 }
 
-// ABCD 选项网格（填空 / 连线 共用）
-function OptionGrid({ q, selectedWord, isCorrect, onPick }) {
+// ABCD 选项网格（填空：先选高亮，再点「确定答案」提交）
+function OptionGrid({ q, selectedWord, isCorrect, onSelect }) {
   return (
     <div className="grid grid-cols-2 gap-2">
       {q.options.map((opt, i) => {
         let cls = 'border rounded-lg text-left transition text-sm ';
         const isRight = opt === q.correct_answer;
         const isWrongSel = opt === selectedWord && !isCorrect;
-        if (selectedWord === null) cls += 'border-gray-200 hover:border-indigo-300 active:bg-indigo-50';
-        else if (isRight) cls += 'border-green-400 bg-green-50 text-green-800';
-        else if (isWrongSel) cls += 'border-red-400 bg-red-50 text-red-800';
-        else cls += 'border-gray-100 bg-gray-50 text-gray-400';
+        const isSelected = opt === selectedWord && isCorrect === null;
+        if (isCorrect !== null) {
+          if (isRight) cls += 'border-green-400 bg-green-50 text-green-800';
+          else if (isWrongSel) cls += 'border-red-400 bg-red-50 text-red-800';
+          else cls += 'border-gray-100 bg-gray-50 text-gray-400';
+        } else if (isSelected) {
+          cls += 'border-indigo-400 bg-indigo-50 text-indigo-800 font-medium';
+        } else {
+          cls += 'border-gray-200 hover:border-indigo-300 active:bg-indigo-50';
+        }
         return (
-          <button key={i} onClick={() => onPick(opt)} disabled={selectedWord !== null} className={'py-2.5 px-3 ' + cls}>
+          <button key={i} onClick={() => onSelect(opt)} disabled={isCorrect !== null} className={'py-2.5 px-3 ' + cls}>
             <span className="text-gray-300 mr-1.5 text-xs">{String.fromCharCode(65 + i)}.</span><span className="font-medium">{opt}</span>
             {selectedWord !== null && <div className="text-[10px] mt-1 opacity-70">{(q.option_defs && q.option_defs[i]) ? (isRight ? '✓ ' : '') + q.option_defs[i] : ''}</div>}
           </button>
@@ -743,11 +749,15 @@ function CollocationBuilder({ q, initialResult, onCommit, onSolved }) {
 
   const hint = (q.sentence || '').replace(new RegExp('\\b' + escapeReg(q.correct_answer) + '\\b', 'i'), '______');
 
-  const pick = (opt) => {
-    if (picked !== null) return;
-    const correct = opt === q.correct_answer;
-    setPicked(opt); setIsCorrect(correct);
-    onCommit(correct, opt, q.correct_answer);
+  const select = (opt) => {
+    if (isCorrect !== null) return;
+    setPicked(prev => (prev === opt ? null : opt)); // 再点同一项取消
+  };
+  const confirm = () => {
+    if (picked === null || isCorrect !== null) return;
+    const correct = picked === q.correct_answer;
+    setIsCorrect(correct);
+    onCommit(correct, picked, q.correct_answer);
     onSolved(correct);
   };
 
@@ -762,14 +772,29 @@ function CollocationBuilder({ q, initialResult, onCommit, onSolved }) {
           let cls = 'border rounded-lg text-left transition text-sm px-3 py-2.5 ';
           const isRight = opt === q.correct_answer;
           const isWrongSel = picked === opt && !isCorrect;
-          if (picked === null) cls += 'border-gray-200 hover:border-indigo-300 active:bg-indigo-50';
-          else if (isRight) cls += 'border-green-400 bg-green-50 text-green-800';
-          else if (isWrongSel) cls += 'border-red-400 bg-red-50 text-red-800';
-          else cls += 'border-gray-100 bg-gray-50 text-gray-400';
-          return <button key={i} onClick={() => pick(opt)} disabled={picked !== null} className={cls}>{String.fromCharCode(65 + i)}. {opt}</button>;
+          const isSelected = picked === opt && isCorrect === null;
+          if (isCorrect !== null) {
+            if (isRight) cls += 'border-green-400 bg-green-50 text-green-800';
+            else if (isWrongSel) cls += 'border-red-400 bg-red-50 text-red-800';
+            else cls += 'border-gray-100 bg-gray-50 text-gray-400';
+          } else if (isSelected) {
+            cls += 'border-indigo-400 bg-indigo-50 text-indigo-800 font-medium';
+          } else {
+            cls += 'border-gray-200 hover:border-indigo-300 active:bg-indigo-50';
+          }
+          return <button key={i} onClick={() => select(opt)} disabled={isCorrect !== null} className={cls}>{String.fromCharCode(65 + i)}. {opt}</button>;
         })}
       </div>
-      {picked !== null && (
+      {isCorrect === null && picked !== null && (
+        <button onClick={confirm}
+          className="mt-3 w-full text-sm bg-indigo-600 text-white py-2.5 rounded-lg hover:bg-indigo-700 font-medium">
+          确定答案
+        </button>
+      )}
+      {isCorrect === null && picked === null && (
+        <p className="mt-3 text-center text-xs text-gray-400">请选择一个词</p>
+      )}
+      {isCorrect !== null && (
         <div className={'mt-3 px-3 py-2 rounded text-xs ' + (isCorrect ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700')}>
           {isCorrect ? `✓ 正确！${q.word} ${q.correct_answer} 是地道搭配` : `✗ 正确答案：${q.word} ${q.correct_answer}`}
         </div>
@@ -1440,13 +1465,16 @@ export default function Practice() {
     if (modeIndex > 0) setModeIndex(p => p - 1);
   };
 
-  /* ── 答题操作 ── */
-  const pickWord = (word) => {
-    if (selectedWord !== null) return;
-    const correct = word === currentQuestion.correct_answer;
-    setSelectedWord(word);
+  /* ── 句子填空：先选（可取消），按「确定答案」才提交 ── */
+  const selectFill = (word) => {
+    if (isCorrect !== null) return; // 已确认后不可改
+    setSelectedWord(prev => (prev === word ? null : word)); // 再点同一项取消
+  };
+  const confirmFill = () => {
+    if (selectedWord === null || isCorrect !== null) return;
+    const correct = selectedWord === currentQuestion.correct_answer;
     setIsCorrect(correct);
-    commit(currentQuestion, correct, word, currentQuestion.correct_answer);
+    commit(currentQuestion, correct, selectedWord, currentQuestion.correct_answer);
   };
 
   /* 同义替换：先选（再点取消），按「确定答案」才提交 */
@@ -2029,7 +2057,16 @@ export default function Practice() {
                       </div>
                     </div>
                   )}
-                  <OptionGrid q={q} selectedWord={selectedWord} isCorrect={isCorrect} onPick={pickWord} />
+                  <OptionGrid q={q} selectedWord={selectedWord} isCorrect={isCorrect} onSelect={selectFill} />
+                  {isCorrect === null && selectedWord !== null && (
+                    <button onClick={confirmFill}
+                      className="mt-3 w-full text-sm bg-indigo-600 text-white py-2.5 rounded-lg hover:bg-indigo-700 font-medium">
+                      确定答案
+                    </button>
+                  )}
+                  {isCorrect === null && selectedWord === null && (
+                    <p className="mt-3 text-center text-xs text-gray-400">请选择一个词</p>
+                  )}
                 </>
               )}
 
