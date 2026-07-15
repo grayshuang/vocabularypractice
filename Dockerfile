@@ -1,6 +1,6 @@
 # 词汇练习全栈应用 —— 单镜像部署
 # 前端（Vite）构建后由后端 Express 同源托管，最终只暴露一个端口。
-FROM node:18-alpine
+FROM node:22-alpine
 
 WORKDIR /app
 
