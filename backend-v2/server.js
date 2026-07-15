@@ -135,7 +135,15 @@ app.get('/api/teacher/rooms', authMiddleware, (req, res) => {
   if (req.user.type !== 'teacher') return res.status(403).json({ error: '无权限' });
   const db = readDB();
   const rooms = db.rooms.filter(r => r.teacher_id === req.user.id).map(room => {
-    const studentCount = db.studentRooms.filter(sr => sr.room_id === room.id).length;
+    const joinedCount = db.studentRooms.filter(sr => sr.room_id === room.id).length;
+    const practiceStudentIds = db.practiceSessions
+      .filter(ps => ps.room_id === room.id)
+      .map(ps => ps.student_id);
+    const practiceCount = new Set(practiceStudentIds).size;
+    // 去重：加入列表 + 练习记录里的学生（取并集）
+    const joinedIds = db.studentRooms.filter(sr => sr.room_id === room.id).map(sr => sr.student_id);
+    const allStudentIds = [...new Set([...joinedIds, ...practiceStudentIds])];
+    const studentCount = allStudentIds.length;
     return { ...room, student_count: studentCount };
   });
   res.json(rooms);
@@ -1165,7 +1173,13 @@ app.get('/api/teacher/room/:roomId/students', authMiddleware, (req, res) => {
   if (req.user.type !== 'teacher') return res.status(403).json({ error: '无权限' });
   const db = readDB();
   const roomId = parseInt(req.params.roomId);
-  const studentIds = db.studentRooms.filter(sr => sr.room_id === roomId).map(sr => sr.student_id);
+  // 合并：正式加入的学生 + 有过练习记录但没点加入的学生（去重）
+  const joinedIds = db.studentRooms.filter(sr => sr.room_id === roomId).map(sr => sr.student_id);
+  const practiceIds = db.practiceSessions
+    .filter(ps => ps.room_id === roomId)
+    .map(ps => ps.student_id)
+    .filter(id => !joinedIds.includes(id));
+  const studentIds = [...new Set([...joinedIds, ...practiceIds])];
   const students = db.students.filter(s => studentIds.includes(s.id)).map(s => {
     const sessions = db.practiceSessions.filter(ps => ps.student_id === s.id && ps.room_id === roomId);
     const finishedSessions = sessions.filter(ps => ps.finished_at);

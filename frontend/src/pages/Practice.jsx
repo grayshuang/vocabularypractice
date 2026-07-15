@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect, Component } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import api from '../api';
 import { getToken } from '../auth';
@@ -1048,6 +1048,28 @@ function LookAlike({ q, initialResult, onCommit, onSolved }) {
   );
 }
 
+// 错误边界：防止结果页渲染崩溃导致白屏
+class ResultErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error('Practice 结果页渲染错误:', error, info); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center gap-3 p-8 text-center bg-gray-50">
+          <p className="text-red-600 font-bold text-lg">结果页加载出错</p>
+          <pre className="text-xs text-red-500 bg-red-50 rounded p-3 max-w-2xl overflow-auto whitespace-pre-wrap text-left">
+            {String(this.state.error && this.state.error.stack || this.state.error)}
+          </pre>
+          <button onClick={() => window.location.reload()}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm">刷新页面</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function Practice() {
   const [searchParams] = useSearchParams();
   const roomCode = searchParams.get('room_code');
@@ -1425,6 +1447,18 @@ export default function Practice() {
     setIsCorrect(correct);
     commit(currentQuestion, correct, word, currentQuestion.correct_answer);
   };
+
+  /* 同义替换：先选（再点取消），按「确定答案」才提交 */
+  const selectSynonym = (word) => {
+    if (isCorrect !== null) return; // 已确认后不再更改
+    setSelectedWord(prev => (prev === word ? null : word)); // 再点同一项取消选择
+  };
+  const confirmSynonym = () => {
+    if (selectedWord === null || isCorrect !== null) return;
+    const correct = selectedWord === currentQuestion.correct_answer;
+    setIsCorrect(correct);
+    commit(currentQuestion, correct, selectedWord, currentQuestion.correct_answer);
+  };
   const checkSpelling = () => {
     if (spellChecked) return;
     const target = currentQuestion.word || currentQuestion.correct_answer || '';
@@ -1706,26 +1740,26 @@ export default function Practice() {
           <div className="space-y-1">
             {/* 目标词 */}
             {q?.word && (
-              <p className="text-gray-800 font-medium">📝 <span className="font-bold">{q.word}</span></p>
+              <p className="text-gray-800 font-medium">📝 <span className="font-bold">{typeof q.word === 'object' ? (q.word?.word || q.word?.[0] || JSON.stringify(q.word)) : String(q.word)}</span></p>
             )}
 
             {/* 句子填空 / 词格找句：显示原句 */}
             {(mode === 'sentence_fill' || mode === 'sentence_search') && q?.sentence && (
               <p className="text-gray-600 leading-relaxed bg-white rounded px-2 py-1 border border-gray-100">
-                {q.sentence}
+                {typeof q.sentence === 'object' ? JSON.stringify(q.sentence) : String(q.sentence)}
               </p>
             )}
 
             {/* 中文翻译 */}
             {q?.chinese && (
-              <p className="text-gray-500 italic">💬 {q.chinese}</p>
+              <p className="text-gray-500 italic">💬 {typeof q.chinese === 'object' ? JSON.stringify(q.chinese) : String(q.chinese)}</p>
             )}
 
             {/* 学生答案 */}
             <div className="flex items-start gap-1 mt-1">
               <span className="text-gray-400 shrink-0">👉 你的答案：</span>
               <span className={(isSkipped ? 'text-gray-300 italic' : isOk ? 'text-green-700 font-medium' : 'text-red-600 line-through')}>
-                {isSkipped ? '（未作答）' : (r.student_answer || '—')}
+                {isSkipped ? '（未作答）' : (typeof r.student_answer === 'object' ? JSON.stringify(r.student_answer) : (r.student_answer || '—'))}
               </span>
             </div>
 
@@ -1733,7 +1767,7 @@ export default function Practice() {
             {!isOk && q && (
               <div className="flex items-start gap-1">
                 <span className="text-green-500 shrink-0">✅ 正确答案：</span>
-                <span className="text-green-700 font-medium">{r.correct_answer || q.word || q.answer || '—'}</span>
+                <span className="text-green-700 font-medium">{typeof r.correct_answer === 'object' ? JSON.stringify(r.correct_answer) : (r.correct_answer || typeof q.word === 'string' ? q.word : (q.word?.word || '—'))}</span>
               </div>
             )}
 
@@ -1774,6 +1808,7 @@ export default function Practice() {
     };
 
     return (
+      <ResultErrorBoundary>
       <div className="min-h-screen bg-gray-50 p-3 pb-24">
         <div className="max-w-lg mx-auto">
           {/* 汇总卡片 */}
@@ -1856,6 +1891,7 @@ export default function Practice() {
           </div>
         </div>
       </div>
+      </ResultErrorBoundary>
     );
   }
 
@@ -1996,14 +2032,39 @@ export default function Practice() {
                     {defChoices.map((c, i) => {
                       let cls = 'border rounded-lg text-left transition text-sm px-3 py-2.5 ';
                       const isRight = c.word === q.correct_answer;
-                      const isWrongSel = selectedWord === c.word && !isCorrect;
-                      if (selectedWord === null) cls += 'border-gray-200 hover:border-indigo-300 active:bg-indigo-50';
-                      else if (isRight) cls += 'border-green-400 bg-green-50 text-green-800';
-                      else if (isWrongSel) cls += 'border-red-400 bg-red-50 text-red-800';
-                      else cls += 'border-gray-100 bg-gray-50 text-gray-400';
-                      return <button key={i} onClick={() => pickWord(c.word)} disabled={selectedWord !== null} className={cls}>{String.fromCharCode(65 + i)}. {c.def}</button>;
+                      const isSelected = selectedWord === c.word;
+                      const isAnswered = isCorrect !== null;
+                      if (!isAnswered) {
+                        // 选择阶段：选中高亮，未选中性
+                        if (isSelected) cls += 'border-indigo-400 bg-indigo-50 text-indigo-800 font-medium';
+                        else cls += 'border-gray-200 hover:border-indigo-300 active:bg-indigo-50';
+                      } else {
+                        // 已确认：正确绿、选错红、其余灰
+                        if (isRight) cls += 'border-green-400 bg-green-50 text-green-800';
+                        else if (isSelected) cls += 'border-red-400 bg-red-50 text-red-800';
+                        else cls += 'border-gray-100 bg-gray-50 text-gray-400';
+                      }
+                      return (
+                        <button key={i}
+                          onClick={() => selectSynonym(c.word)}
+                          disabled={isAnswered}
+                          className={cls}>
+                          {String.fromCharCode(65 + i)}. {c.def}
+                        </button>
+                      );
                     })}
                   </div>
+
+                  {/* 确定答案 / 提示 */}
+                  {isCorrect === null && selectedWord !== null && (
+                    <button onClick={confirmSynonym}
+                      className="mt-3 w-full text-sm bg-indigo-600 text-white py-2.5 rounded-lg hover:bg-indigo-700 font-medium">
+                      确定答案
+                    </button>
+                  )}
+                  {isCorrect === null && selectedWord === null && (
+                    <p className="mt-3 text-center text-xs text-gray-400">请选择一个释义</p>
+                  )}
                 </>
               )}
 

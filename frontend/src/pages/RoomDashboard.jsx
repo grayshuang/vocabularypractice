@@ -315,12 +315,12 @@ export default function RoomDashboard() {
                                         <span className={a.is_correct ? 'text-green-600' : 'text-red-500'}>
                                           {a.is_correct ? '✓' : '✗'}
                                         </span>
-                                        <span className="font-semibold">{a.word}</span>
+                                        <span className="font-semibold">{typeof a.word === 'object' ? (a.word?.word || a.word?.[0] || JSON.stringify(a.word)) : String(a.word || '')}</span>
                                         {isUnanswered && (
                                           <span className="text-gray-400 font-normal">（未作答）</span>
                                         )}
                                         {!a.is_correct && !isUnanswered && a.student_answer && (
-                                          <span className="text-red-400 font-normal">（答 {a.student_answer}）</span>
+                                          <span className="text-red-400 font-normal">（答 {typeof a.student_answer === 'object' ? JSON.stringify(a.student_answer) : a.student_answer}）</span>
                                         )}
                                       </span>
                                     );
