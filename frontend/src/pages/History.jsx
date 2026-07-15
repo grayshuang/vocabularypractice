@@ -219,15 +219,19 @@ export default function History() {
                 <div key={i} className="relative bg-white rounded-xl shadow-sm p-4">
                   <div className="flex items-center justify-between mb-2">
                     <span className="font-medium text-gray-800">房间 {h.room_code}</span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-gray-500">{formatDate(h.finished_at)}</span>
-                      {/* 三点菜单按钮 */}
-                      <button
-                        onClick={() => setMenuOpenId(menuOpenId === h.session_id ? null : h.session_id)}
-                        className="text-gray-400 hover:text-gray-600 text-xl leading-none px-1"
-                        title="更多操作"
-                      >⋯</button>
-                    </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-gray-500">{formatDate(h.finished_at)}</span>
+                    <button
+                      onClick={() => navigate(`/practice?room_code=${encodeURIComponent(h.room_code)}`)}
+                      className="text-xs px-2 py-1 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100"
+                    >继续练习</button>
+                    {/* 三点菜单按钮 */}
+                    <button
+                      onClick={() => setMenuOpenId(menuOpenId === h.session_id ? null : h.session_id)}
+                      className="text-gray-400 hover:text-gray-600 text-xl leading-none px-1"
+                      title="更多操作"
+                    >⋯</button>
+                  </div>
                   </div>
 
                   {/* 三点下拉菜单 */}

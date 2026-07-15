@@ -177,6 +177,15 @@ app.get('/api/room/:roomCode', (req, res) => {
     const mode = k.slice(sep + 1);
     if (rid === room.id) usage[mode] = (usage[mode] || 0) + v;
   });
+  // 统计学生人数（合并 studentRooms + practiceSessions 去重）
+  const joinedIds = db.studentRooms.filter(sr => sr.room_id === room.id).map(sr => sr.student_id);
+  const practiceIds = db.practiceSessions
+    .filter(ps => Number(ps.room_id) === room.id)
+    .map(ps => ps.student_id)
+    .filter(id => !joinedIds.includes(id));
+  const allStudentIds = [...new Set([...joinedIds, ...practiceIds])];
+  const studentCount = allStudentIds.length;
+
   res.json({
     id: room.id,
     room_code: room.room_code,
@@ -185,6 +194,7 @@ app.get('/api/room/:roomCode', (req, res) => {
     mode_word_map: room.mode_word_map || {},
     level: room.level || '6',
     mode_usage: usage,
+    student_count: studentCount,
     teacher_name: teacher ? teacher.username : '未知'
   });
 });
@@ -1297,7 +1307,7 @@ app.get('/api/teacher/room/:roomId/students', authMiddleware, (req, res) => {
   // 合并：正式加入的学生 + 有过练习记录但没点加入的学生（去重）
   const joinedIds = db.studentRooms.filter(sr => sr.room_id === roomId).map(sr => sr.student_id);
   const practiceIds = db.practiceSessions
-    .filter(ps => ps.room_id === roomId)
+    .filter(ps => Number(ps.room_id) === roomId)
     .map(ps => ps.student_id)
     .filter(id => !joinedIds.includes(id));
   const studentIds = [...new Set([...joinedIds, ...practiceIds])];

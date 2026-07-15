@@ -1345,6 +1345,7 @@ export default function Practice() {
         word: q.word,
         is_correct: isCorrectVal,
         mode: q.mode || activeMode,
+        uid: q.uid,
       });
     } catch (err) { console.error('记录答案失败', err); }
     setResults(prev => {
@@ -1623,6 +1624,7 @@ export default function Practice() {
             word: q.word || q.correct_answer || '',
             is_correct: false,
             mode: q.mode || 'unknown',
+            uid: q.uid,
           });
         } catch { /* 静默失败，不影响主流程 */ }
       }
