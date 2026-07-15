@@ -4,8 +4,8 @@ FROM node:22-alpine
 
 WORKDIR /app
 
-# 1) 前端：安装依赖并构建到 frontend/dist
-COPY frontend/package*.json ./frontend/
+# 1) 前端：复制全部源码，安装依赖并构建到 frontend/dist
+COPY frontend/ ./frontend/
 RUN cd frontend && npm install && npx vite build
 
 # 2) 后端：仅安装运行时依赖
