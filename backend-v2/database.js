@@ -392,8 +392,19 @@ function jsonWrite(data) {
 // ==================== 统一对外接口（与原 API 完全兼容）====================
 
 function readDB() {
-  // 同步读取（兼容现有代码），PG 模式下返回缓存
-  if (pgReady && _cachedDB) return _cachedDB;
+  // 同步读取（兼容现有代码），PG 模式下只返回 PG 缓存
+  if (pgReady) {
+    // ⚠️ 关键防护：PG 模式下绝不回退到 jsonRead() 的默认模板（含预置 admin），
+    // 否则一次空写回会触发 pgWriteAll 的 TRUNCATE，清空整库数据。
+    if (!_cachedDB) {
+      _cachedDB = {
+        admins: [], teachers: [], students: [], rooms: [],
+        studentRooms: [], practiceSessions: [], practiceAnswers: [],
+        wordStats: [], wordBank: [], studentProgress: [], modeUsage: {}
+      };
+    }
+    return _cachedDB;
+  }
   return jsonRead();
 }
 
@@ -454,18 +465,25 @@ async function flushDB() {
 
 async function initDB() {
   if (USE_PG && pool) {
-    try {
-      await ensureTables();
-      pgReady = true;
-      _cachedDB = await pgReadAll();
-      console.log(`✅ 数据库已连接（PostgreSQL），缓存 ${Object.keys(_cachedDB).length} 张表`);
-      console.log('超级管理员账号: admin / admin123456');
-    } catch (e) {
-      console.error('❌ PostgreSQL 连接失败，回退到 JSON 文件:', e.message);
-      pgReady = false;
-      console.log('数据库连接成功（JSON文件）');
-      console.log('超级管理员账号: admin / admin123456');
+    const maxRetries = 5;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        await ensureTables();
+        pgReady = true;
+        _cachedDB = await pgReadAll();
+        console.log(`✅ 数据库已连接（PostgreSQL），缓存 ${Object.keys(_cachedDB).length} 张表`);
+        console.log('超级管理员账号: admin / admin123456');
+        return;
+      } catch (e) {
+        console.error(`❌ PostgreSQL 连接失败（第 ${attempt}/${maxRetries} 次）：`, e.message);
+        pgReady = false;
+        if (attempt < maxRetries) {
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      }
     }
+    console.error('⚠️ PostgreSQL 多次连接失败，回退到 JSON 文件模式（数据将不持久化，请检查 DATABASE_URL 是否正确）');
+    console.log('超级管理员账号: admin / admin123456');
   } else {
     jsonRead(); // 触发初始化
     console.log('数据库连接成功（JSON文件）');
