@@ -53,13 +53,24 @@ function correctDef(q) {
   return i >= 0 && q.option_defs && q.option_defs[i] ? stripChinese(q.option_defs[i]) : '';
 }
 
-/** 前端安全网：去掉字符串中的中文和词性标注（adj./v. 等） */
+/** 拼写听写专用释义：仅用 definition 字段，且不能包含答案词本身（避免泄露原词）；option_defs 含答案词，禁用 */
+function spellingDef(q) {
+  const def = stripChinese(q.definition || '');
+  const w = (q.word || q.correct_answer || '').toLowerCase();
+  if (def && w && !def.toLowerCase().includes(w)) return def;
+  return '';
+}
+
+/** 前端安全网：去掉字符串中的中文和词性标注（adj./v. 等），无论是否后接中文 */
 function stripChinese(s) {
   if (typeof s !== 'string') return s || '';
-  return s.replace(/\s*(?:adj\.?|v\.?|n\.?|adv\.?|phrase\.?|vi\.?|vt\.?)\s*[\u4e00-\u9fff\u3400-\u4dbf][\u4e00-\u9fff\s（）()""''「」【】、。！？：；—…·\-A-Za-z]*$/, '')
-         .replace(/\s*[（（][^））]*[））]\s*$/, '')
-         .replace(/\s*\([^)]*\)\s*$/, '')
-         .trim() || s;
+  return s
+    .replace(/[一-鿿㐀-䶿]/g, '')                                                       // 去掉所有中文字符
+    .replace(/(^|\s)(?:adj|adv|prep|conj|pron|det|int|aux|art|num|abbr|phr|vi|vt|n|v)\.?(?=\s|$)/gi, '$1') // 去掉独立词性标注
+    .replace(/\s*[（（][^））]*[））]\s*/g, ' ')                                          // 去掉括号注释
+    .replace(/\s*\([^)]*\)\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 const norm = s => String(s || '').toLowerCase().replace(/[^a-z\s-]/g, '').replace(/\s+/g, ' ').trim();
 function shuffle(arr) {
@@ -123,8 +134,9 @@ function firstLetterHint(word) {
 // 发音朗读（Web Speech API）
 function speakWord(word) {
   if (!word || !window.speechSynthesis) return;
+  const text = stripChinese(String(word)).trim() || String(word);
   window.speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(word);
+  const u = new SpeechSynthesisUtterance(text);
   u.lang = 'en-US';
   u.rate = 0.85;
   window.speechSynthesis.speak(u);
@@ -1054,7 +1066,7 @@ function LookAlike({ q, initialResult, onCommit, onSolved }) {
       <div className="bg-indigo-50 border border-indigo-100 rounded px-3 py-2 mb-2">
         <p className="text-[10px] text-indigo-400">本轮目标词</p>
         <p className="text-xl font-bold text-indigo-800">{target}</p>
-        {q.definition && <p className="text-[10px] text-indigo-400 mt-0.5">{q.definition}</p>}
+        {q.definition && stripChinese(q.definition) && <p className="text-[10px] text-indigo-400 mt-0.5">{stripChinese(q.definition)}</p>}
       </div>
       {q.chinese && <p className="text-xs text-gray-500 mb-2">🔍 提示：{q.chinese}</p>}
       {q.sentence && <p className="text-[10px] text-gray-400 mb-2 italic">"{q.sentence}"</p>}
@@ -2244,14 +2256,13 @@ export default function Practice() {
                 <>
                   <p className="text-[11px] text-indigo-500 mb-1">拼写听写 · 看释义写单词</p>
                   <div className="flex items-start gap-2 mb-1">
-                    <p className="text-sm text-gray-700 leading-relaxed flex-1">{correctDef(q) || '—'}</p>
+                    <p className="text-sm text-gray-700 leading-relaxed flex-1">{spellingDef(q) || '—'}</p>
                     <button onClick={() => speakWord(q.word || q.correct_answer || '')}
                       className="shrink-0 px-2.5 py-1 rounded-full border border-indigo-200 bg-indigo-50 text-indigo-600 text-[11px] hover:bg-indigo-100 transition flex items-center gap-1"
                       title="发音提示（请先思考语义对应拼写，实在想不到再点提示）">
                       🔊 发音
                     </button>
                   </div>
-                  {q.chinese && <p className="text-xs text-gray-400 mb-2">{q.chinese}</p>}
                   {/* 首字母提示 */}
                   <div className="mb-2 px-3 py-1.5 bg-gray-50 rounded-lg border border-gray-100">
                     <span className="text-[10px] text-gray-400 mr-1.5">首字母提示</span>

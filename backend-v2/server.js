@@ -346,7 +346,7 @@ ${levelBlock}
 - topic_category: 雅思话题类别（从以下选一个）：教育类/科技类/环境类/社会类/政府类/文化类/健康类/工作类/媒体类/犯罪类/全球化类/城市化类
 - thinking_tag: 思路标签（从以下选一个）：人际/身心/学习/经济/效率/环境/科技/减压/好恶/性格/能力/规划
 - template: 逻辑句型模板（如 "While it's universally believed that..., I'd rather say..."）
-- definition: **纯英文**简单短释义（5-10个单词，禁止包含任何中文字符）
+- definition: **纯英文**简单短释义（5-10个单词，禁止包含任何中文字符，**且绝对禁止包含 word 字段的单词本身**——例如 word 是 "dense" 时，definition 不能出现 "dense" 这个词）
 - option_defs: 与 options 顺序严格对应的每个词的**纯英文**简单短释义数组（长度必须等于 options 长度）；第1个是正确答案释义，其余是干扰项释义；**绝对禁止包含任何中文字符**
 - chinese: 中文翻译
 
@@ -408,20 +408,28 @@ ${JSON.stringify(wordBatch)}
   // 限制原句长度：含空白计 1 词，最长 28 词（雅思复杂句型需要足够长度表达完整语义）
   questions.forEach(q => { if (q && q.sentence) q.sentence = truncateSentence(q.sentence, 28); });
 
-    // 安全清洗：确保 word/options/correct_answer/definition/option_defs 不含中文（AI 偶尔会在这些字段混入中文/词性标注）
+    // 安全清洗：确保 word/options/correct_answer/definition/option_defs 不含中文与词性标注
     const stripChinese = (s) => {
-      if (typeof s !== 'string') return s;
-      return s.replace(/\s*(?:adj\.?|v\.?|n\.?|adv\.?|phrase\.?|vi\.?|vt\.?)\s*[\u4e00-\u9fff\u3400-\u4dbf][\u4e00-\u9fff\s（）()""''「」【】、。！？：；—…·\-A-Za-z]*$/, '')
-             .replace(/\s*[（（][^））]*[））]\s*$/, '')
-             .replace(/\s*\([^)]*\)\s*$/, '')
-             .replace(/^[""\s]+|[""\s]+$/g, '').trim() || s;
+      if (typeof s !== 'string') return s || '';
+      return s
+        .replace(/[一-鿿㐀-䶿]/g, '')                                  // 去掉所有中文字符
+        .replace(/(^|\s)(?:adj|adv|prep|conj|pron|det|int|aux|art|num|abbr|phr|vi|vt|n|v)\.?(?=\s|$)/gi, '$1') // 去掉词性标注（无论是否后接中文）
+        .replace(/\s*[（（][^））]*[））]\s*/g, ' ')                   // 去掉括号注释
+        .replace(/\s*\([^)]*\)\s*/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
     };
     questions.forEach(q => {
       if (!q) return;
       if (q.word) q.word = cleanWordEntry(q.word);           // 用更强力的 cleanWordEntry
       if (q.correct_answer) q.correct_answer = cleanWordEntry(q.correct_answer);
-      if (q.definition) q.definition = stripChinese(q.definition);
       if (Array.isArray(q.options)) q.options = q.options.map(cleanWordEntry);
+      if (q.definition) {
+        q.definition = stripChinese(q.definition);
+        // 定义若包含答案词本身则清空（避免泄露原词）
+        const w = (q.word || q.correct_answer || '').toLowerCase();
+        if (w && q.definition.toLowerCase().includes(w)) q.definition = '';
+      }
       if (Array.isArray(q.option_defs)) q.option_defs = q.option_defs.map(stripChinese);
     });
 
@@ -469,8 +477,8 @@ function generateFallback(words, level, batchIndex) {
       topic_category: topicCat,
       thinking_tag: thinkTag,
       template: pattern,
-      definition: `meaning of "${word}"`,   // 用清洗后的纯词
-      option_defs: options.map(o => `the word "${o}"`),
+      definition: '',   // 降级方案无英文释义，留空（拼写为听写模式，靠音频+首字母提示，避免泄露原词）
+      option_defs: options.map(() => ''),   // 留空，避免回退到含答案词的释义
       chinese
     };
   });
@@ -568,7 +576,35 @@ async function getQuestionsCached(vocabularyList, level) {
     console.log('词库缓存已更新，当前词条数：', bank.length);
   }
 
-  return result;
+  // 最终净化关：无论命中缓存还是新生成，返回前统一清洗，
+  // 确保 word/options/correct_answer/definition/option_defs 绝不含中文、词性标注或答案词泄露
+  const finalStrip = (s) => {
+    if (typeof s !== 'string') return s || '';
+    return s
+      .replace(/[一-鿿㐀-䶿]/g, '')
+      .replace(/(^|\s)(?:adj|adv|prep|conj|pron|det|int|aux|art|num|abbr|phr|vi|vt|n|v)\.?(?=\s|$)/gi, '$1')
+      .replace(/\s*[（（][^））]*[））]\s*/g, ' ')
+      .replace(/\s*\([^)]*\)\s*/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
+  const sanitized = result.map(q => {
+    if (!q) return q;
+    const w = (q.word || q.correct_answer || '').toLowerCase();
+    const clean = {
+      ...q,
+      word: q.word ? cleanWordEntry(q.word) : q.word,
+      correct_answer: q.correct_answer ? cleanWordEntry(q.correct_answer) : q.correct_answer,
+      options: Array.isArray(q.options) ? q.options.map(cleanWordEntry) : q.options,
+      definition: q.definition ? finalStrip(q.definition) : q.definition,
+      option_defs: Array.isArray(q.option_defs) ? q.option_defs.map(finalStrip) : q.option_defs,
+    };
+    // 定义若包含答案词本身则清空
+    if (clean.definition && w && clean.definition.toLowerCase().includes(w)) clean.definition = '';
+    return clean;
+  });
+
+  return sanitized;
 }
 
 // 正则转义
@@ -585,20 +621,10 @@ function escapeRegExp(s) {
  */
 function cleanWordEntry(raw) {
   if (typeof raw !== 'string') return raw || '';
-  // 去掉词性标注 (adj./v./n./adv./phrase./等) + 中文释义 + 括号内容
-  // 匹配模式：空格+词性+中文... 或 词性+中文...
-  let cleaned = raw
-    .replace(/\s+(?:adj\.?|v\.?|n\.?|adv\.?|phrase\.?|vi\.?|vt\.?|prep\.?|conj\.?|pron\.?|det\.?|int\.?)\s*[\u4e00-\u9fff\u3400-\u4dbf][\u4e00-\u9fff\s（）()""''「」【】、。！？：；—…·\-A-Za-z]*$/, '')
-    .replace(/^(?:adj\.?|v\.?|n\.?|adv\.?|phrase\.?|vi\.?|vt\.?|prep\.?|conj\.?|pron\.?|det\.?|int\.?)\s*[\u4e00-\u9fff\u3400-\u4dbf][\u4e00-\u9fff\s（）()""''「】【】、。！？：；—…·\-A-Za-z]*\s*/, '')
-    .replace(/\s*（[^）]*）\s*$/, '')     // 去掉尾部（中文括号注释）
-    .replace(/\s*\([^)]*\)\s*$/, '')     // 去掉尾部(英文括号注释)
-    .trim();
-  // 如果结果为空或只有非英文字符，返回原值的英文前缀
-  if (!/^[a-zA-Z]/.test(cleaned)) {
-    const m = raw.match(/^[a-zA-Z][a-zA-Z\-']*/);
-    cleaned = m ? m[0] : raw.trim();
-  }
-  return cleaned;
+  // 提取第一个英文单词串（可含连字符、多词短语），彻底忽略前/后的中文与词性标注
+  // 例如："dense adj. 浓密的" → "dense"；"take responsibility v. 承担责任" → "take responsibility"
+  const m = raw.match(/[a-zA-Z][a-zA-Z\-']*(?:\s+[a-zA-Z][a-zA-Z\-']*)*/);
+  return m ? m[0].trim() : raw.trim();
 }
 
 function shuffleArray(arr) {
@@ -971,7 +997,7 @@ function buildLookalikeQuestions() {
     confusers: p.confusers,
     sentence: p.sentence,
     chinese: p.zh,
-    definition: p.def,
+    definition: '',   // 内置库 def 含词性+中文，不作为题目内容展示
     mode: 'lookalike'
   }));
 }
