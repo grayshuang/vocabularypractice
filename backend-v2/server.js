@@ -409,19 +409,19 @@ ${JSON.stringify(wordBatch)}
   questions.forEach(q => { if (q && q.sentence) q.sentence = truncateSentence(q.sentence, 28); });
 
     // 安全清洗：确保 word/options/correct_answer/definition/option_defs 不含中文（AI 偶尔会在这些字段混入中文/词性标注）
-    const CHINESE_RE = /[\u4e00-\u9fff\u3400-\u4dbf]/;
     const stripChinese = (s) => {
       if (typeof s !== 'string') return s;
-      // 去掉中文及前后可能附着的 "adj./v./n./adv./phrase" 标注和多余空白
-      return s.replace(/\s*(?:adj\.?|v\.?|n\.?|adv\.?|phrase\.?)\s*[\u4e00-\u9fff\u3400-\u4dbf][\u4e00-\u9fff\s（）()""''「」【】、。！？：；—…·]*$/, '').trim()
+      return s.replace(/\s*(?:adj\.?|v\.?|n\.?|adv\.?|phrase\.?|vi\.?|vt\.?)\s*[\u4e00-\u9fff\u3400-\u4dbf][\u4e00-\u9fff\s（）()""''「」【】、。！？：；—…·\-A-Za-z]*$/, '')
+             .replace(/\s*[（（][^））]*[））]\s*$/, '')
+             .replace(/\s*\([^)]*\)\s*$/, '')
              .replace(/^[""\s]+|[""\s]+$/g, '').trim() || s;
     };
     questions.forEach(q => {
       if (!q) return;
-      if (q.word) q.word = stripChinese(q.word);
-      if (q.correct_answer) q.correct_answer = stripChinese(q.correct_answer);
+      if (q.word) q.word = cleanWordEntry(q.word);           // 用更强力的 cleanWordEntry
+      if (q.correct_answer) q.correct_answer = cleanWordEntry(q.correct_answer);
       if (q.definition) q.definition = stripChinese(q.definition);
-      if (Array.isArray(q.options)) q.options = q.options.map(stripChinese);
+      if (Array.isArray(q.options)) q.options = q.options.map(cleanWordEntry);
       if (Array.isArray(q.option_defs)) q.option_defs = q.option_defs.map(stripChinese);
     });
 
@@ -438,8 +438,10 @@ ${JSON.stringify(wordBatch)}
  * 高质量降级方案：每个词汇都有独立的不同句子
  */
 function generateFallback(words, level, batchIndex) {
-  return words.map((word, i) => {
-    // 简单词性猜测
+  return words.map((rawWord, i) => {
+    // 清洗词汇条目：去掉中文和词性标注，只保留纯英文单词
+    const word = cleanWordEntry(rawWord);
+    // 简单词性猜测（基于清洗后的纯词）
     let pos = 'n';
     if (word.length <= 4 && /^[a-z]+$/i.test(word)) pos = 'adj';
     else if (/^(be |get |go |take |make |have |do |set |put |bring |fall |grow|look|come)/i.test(word)) pos = 'v';
@@ -448,10 +450,10 @@ function generateFallback(words, level, batchIndex) {
     const templateBank = FALLBACK_TEMPLATES[pos] || FALLBACK_TEMPLATES.n;
     const tmpl = templateBank[(i + batchIndex * BATCH_SIZE) % templateBank.length];
     const sentence = truncateSentence(tmpl.t.replace('{w}', '________'), 28);
-    const chinese = tmpl.c.replace('{w}', word);
+    const chinese = tmpl.c.replace('{w}', word);  // 中文翻译用清洗后的纯词
 
     // 从同批其他词中取干扰项
-    const others = words.filter(w => w !== word).sort(() => Math.random() - 0.5).slice(0, 3);
+    const others = words.filter(w => cleanWordEntry(w) !== word).map(cleanWordEntry).sort(() => Math.random() - 0.5).slice(0, 3);
     const options = [word, ...others].sort(() => Math.random() - 0.5);
 
     const topicCat = TOPIC_CATEGORIES[(i + batchIndex) % TOPIC_CATEGORIES.length];
@@ -459,7 +461,7 @@ function generateFallback(words, level, batchIndex) {
     const pattern = SENTENCE_PATTERNS[i % SENTENCE_PATTERNS.length];
 
     return {
-      word,
+      word,          // 已清洗的纯英文单词
       pos,
       sentence,
       options,
@@ -467,7 +469,7 @@ function generateFallback(words, level, batchIndex) {
       topic_category: topicCat,
       thinking_tag: thinkTag,
       template: pattern,
-      definition: `meaning of "${word}"`,
+      definition: `meaning of "${word}"`,   // 用清洗后的纯词
       option_defs: options.map(o => `the word "${o}"`),
       chinese
     };
@@ -514,26 +516,34 @@ async function generateQuestionsWithAI(vocabularyList, level) {
 async function getQuestionsCached(vocabularyList, level) {
   const lv = ['5', '6', '7+'].includes(level) ? level : '6';
   if (!vocabularyList || vocabularyList.length === 0) return [];
+  // 清洗词汇表：去掉每条的中文和词性标注，只保留纯英文单词
+  const cleanedList = vocabularyList.map(cleanWordEntry);
   const db = readDB();
   const bank = db.wordBank || [];
   const result = [];
   const missing = [];
 
-  for (const w of vocabularyList) {
+  for (let i = 0; i < vocabularyList.length; i++) {
+    const rawW = vocabularyList[i];
+    const w = cleanedList[i];   // 用清洗后的词做缓存查找
     const key = w.toLowerCase();
     // 命中条件：同词且同目标水平（不同水平生成不同难度的句子）
     const hit = bank.find(b => b.word.toLowerCase() === key && (b.level || '6') === lv);
     if (hit) {
       result.push(applyWordCase(hit, w));
     } else {
-      missing.push(w);
+      missing.push(rawW);  // 未命中时传原始值给AI（让AI自己提取词义）
     }
   }
 
   if (missing.length > 0) {
-    console.log('词库缓存未命中，调用AI生成新词：', missing, '水平：', lv);
+    console.log('词库缓存未命中，调用AI生成新词：', missing.map(cleanWordEntry), '水平：', lv);
     const generated = await generateQuestionsWithAI(missing, lv);
     generated.forEach(q => {
+      // 清洗AI返回的所有字段
+      q.word = cleanWordEntry(q.word);
+      q.correct_answer = cleanWordEntry(q.correct_answer);
+      if (Array.isArray(q.options)) q.options = q.options.map(cleanWordEntry);
       const key = (q.word || '').toLowerCase();
       if (key && !bank.find(b => b.word.toLowerCase() === key && (b.level || '6') === lv)) {
         bank.push({
@@ -564,6 +574,31 @@ async function getQuestionsCached(vocabularyList, level) {
 // 正则转义
 function escapeRegExp(s) {
   return (s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 从词汇表原始条目中提取纯英文单词
+ * 输入示例："dense adj. 浓密的" → "dense"
+ *       "drain v. 排放排出（液体）" → "drain"
+ *       "take responsibility" → "take responsibility"
+ *       "widespread" → "widespread"
+ */
+function cleanWordEntry(raw) {
+  if (typeof raw !== 'string') return raw || '';
+  // 去掉词性标注 (adj./v./n./adv./phrase./等) + 中文释义 + 括号内容
+  // 匹配模式：空格+词性+中文... 或 词性+中文...
+  let cleaned = raw
+    .replace(/\s+(?:adj\.?|v\.?|n\.?|adv\.?|phrase\.?|vi\.?|vt\.?|prep\.?|conj\.?|pron\.?|det\.?|int\.?)\s*[\u4e00-\u9fff\u3400-\u4dbf][\u4e00-\u9fff\s（）()""''「」【】、。！？：；—…·\-A-Za-z]*$/, '')
+    .replace(/^(?:adj\.?|v\.?|n\.?|adv\.?|phrase\.?|vi\.?|vt\.?|prep\.?|conj\.?|pron\.?|det\.?|int\.?)\s*[\u4e00-\u9fff\u3400-\u4dbf][\u4e00-\u9fff\s（）()""''「】【】、。！？：；—…·\-A-Za-z]*\s*/, '')
+    .replace(/\s*（[^）]*）\s*$/, '')     // 去掉尾部（中文括号注释）
+    .replace(/\s*\([^)]*\)\s*$/, '')     // 去掉尾部(英文括号注释)
+    .trim();
+  // 如果结果为空或只有非英文字符，返回原值的英文前缀
+  if (!/^[a-zA-Z]/.test(cleaned)) {
+    const m = raw.match(/^[a-zA-Z][a-zA-Z\-']*/);
+    cleaned = m ? m[0] : raw.trim();
+  }
+  return cleaned;
 }
 
 function shuffleArray(arr) {

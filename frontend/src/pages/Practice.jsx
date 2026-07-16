@@ -48,9 +48,18 @@ function truncateSentenceForSearch(sentence, maxWords = 15) {
   return words.slice(start, end + 1).join(' ');
 }
 function correctDef(q) {
-  if (q.definition) return q.definition;
+  if (q.definition) return stripChinese(q.definition);
   const i = (q.options || []).indexOf(q.correct_answer);
-  return i >= 0 && q.option_defs && q.option_defs[i] ? q.option_defs[i] : '';
+  return i >= 0 && q.option_defs && q.option_defs[i] ? stripChinese(q.option_defs[i]) : '';
+}
+
+/** 前端安全网：去掉字符串中的中文和词性标注（adj./v. 等） */
+function stripChinese(s) {
+  if (typeof s !== 'string') return s || '';
+  return s.replace(/\s*(?:adj\.?|v\.?|n\.?|adv\.?|phrase\.?|vi\.?|vt\.?)\s*[\u4e00-\u9fff\u3400-\u4dbf][\u4e00-\u9fff\s（）()""''「」【】、。！？：；—…·\-A-Za-z]*$/, '')
+         .replace(/\s*[（（][^））]*[））]\s*$/, '')
+         .replace(/\s*\([^)]*\)\s*$/, '')
+         .trim() || s;
 }
 const norm = s => String(s || '').toLowerCase().replace(/[^a-z\s-]/g, '').replace(/\s+/g, ' ').trim();
 function shuffle(arr) {
@@ -100,10 +109,14 @@ function isSpellingAcceptable(input, target) {
 // 生成首字母提示占位符：如 "paranoid" → "p______d"，"look forward to" → "l_ f_____ t_"
 function firstLetterHint(word) {
   if (!word) return '';
-  const parts = word.split(/\s+/);
+  // 先清洗掉中文和词性，只保留纯英文单词
+  const cleaned = stripChinese(word);
+  const parts = cleaned.split(/\s+/).filter(Boolean);
   return parts.map(p => {
-    if (p.length <= 1) return p;
-    return p[0] + '_'.repeat(p.length - 1);
+    // 只对纯英文部分生成提示
+    const en = p.replace(/[^a-zA-Z\-']/g, '');
+    if (en.length <= 1) return en;
+    return en[0] + '_'.repeat(en.length - 1);
   }).join(' ');
 }
 
@@ -764,7 +777,7 @@ function CollocationBuilder({ q, initialResult, onCommit, onSolved }) {
   return (
     <div>
       <p className="text-[11px] text-indigo-500 mb-1">搭配拼词 · 选出能组成地道搭配的词</p>
-      <p className="text-2xl font-bold text-gray-800 mb-1">{q.word} <span className="text-gray-300">+</span> ______</p>
+      <p className="text-2xl font-bold text-gray-800 mb-1">{stripChinese(q.word)} <span className="text-gray-300">+</span> ______</p>
       {q.chinese && <p className="text-xs text-gray-400 mb-3">{q.chinese}</p>}
       <p className="text-xs text-gray-500 mb-3 bg-gray-50 rounded px-2 py-1.5 leading-relaxed">{hint}</p>
       <div className="grid grid-cols-2 gap-2">
@@ -796,7 +809,7 @@ function CollocationBuilder({ q, initialResult, onCommit, onSolved }) {
       )}
       {isCorrect !== null && (
         <div className={'mt-3 px-3 py-2 rounded text-xs ' + (isCorrect ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700')}>
-          {isCorrect ? `✓ 正确！${q.word} ${q.correct_answer} 是地道搭配` : `✗ 正确答案：${q.word} ${q.correct_answer}`}
+          {isCorrect ? `✓ 正确！${stripChinese(q.word)} ${stripChinese(q.correct_answer)} 是地道搭配` : `✗ 正确答案：${stripChinese(q.word)} ${stripChinese(q.correct_answer)}`}
         </div>
       )}
     </div>
@@ -2243,7 +2256,7 @@ export default function Practice() {
                   <div className="mb-2 px-3 py-1.5 bg-gray-50 rounded-lg border border-gray-100">
                     <span className="text-[10px] text-gray-400 mr-1.5">首字母提示</span>
                     <span className="font-mono text-xs text-gray-600 tracking-wider">{firstLetterHint(q.word || q.correct_answer || '')}</span>
-                    <span className="text-[10px] text-gray-300 ml-1.5">（{((q.word || q.correct_answer || '').match(/\s/g) || []).length + 1} 词 / {(q.word || q.correct_answer || '').length} 字母）</span>
+                    <span className="text-[10px] text-gray-300 ml-1.5">（{((stripChinese(q.word || q.correct_answer || '')).match(/\s/g) || []).length + 1} 词 / {stripChinese(q.word || q.correct_answer || '').length} 字母）</span>
                   </div>
                   <input value={typed} onChange={e => setTyped(e.target.value)} disabled={spellChecked}
                     placeholder="输入英文单词…" onKeyDown={e => e.key === 'Enter' && checkSpelling()}
@@ -2252,7 +2265,7 @@ export default function Practice() {
                     <button onClick={checkSpelling} className="mt-2 w-full py-2 text-xs bg-gray-800 text-white rounded hover:bg-gray-700">检查拼写</button>
                   )}
                   {spellChecked && (() => {
-                    const target = q.word || q.correct_answer || '';
+                    const target = stripChinese(q.word || q.correct_answer || '');
                     const dist = typed ? levenshtein(typed.trim(), target) : 999;
                     return (
                       <div className={'mt-3 px-3 py-2 rounded text-xs ' + (isCorrect ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700')}>
@@ -2319,7 +2332,7 @@ export default function Practice() {
                       if (!isBlank) {
                         return (
                           <span key={idx} className="px-2.5 py-1.5 rounded text-xs font-medium text-gray-700 bg-white border border-gray-200 select-none">
-                            {chunk}
+                            {stripChinese(chunk)}
                           </span>
                         );
                       }
@@ -2344,7 +2357,7 @@ export default function Practice() {
                               draggable={!chunkChecked}
                               onDragStart={e => { e.stopPropagation(); setDragData({ source: 'slot', index: idx, chunk }); }}
                               onDragEnd={() => setDragData(null)}
-                            >{chunk}</span>
+                            >{stripChinese(chunk)}</span>
                           ) : '____'}
                         </div>
                       );
@@ -2366,7 +2379,7 @@ export default function Practice() {
                           (selectedPoolIdx === i ? 'border-indigo-500 ring-2 ring-indigo-200 text-indigo-700'
                              : 'border-gray-200 text-gray-700 hover:border-indigo-300') +
                           (chunkChecked ? ' opacity-50' : '')}
-                      >{chunk}</div>
+                      >{stripChinese(chunk)}</div>
                     ))}
                     {chunkPool.length === 0 && <span className="text-xs text-gray-400">全部已放入</span>}
                   </div>
@@ -2391,7 +2404,7 @@ export default function Practice() {
               {/* 反馈（填空 / 同义） */}
               {answered && (activeMode === 'sentence_fill' || activeMode === 'synonym') && (
                 <div className={'mt-3 px-3 py-2 rounded text-xs ' + (isCorrect ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700')}>
-                  {isCorrect ? '✓ 正确！' : `✗ 错误。答案：${q.correct_answer}`}
+                  {isCorrect ? '✓ 正确！' : `✗ 错误。答案：${stripChinese(q.correct_answer)}`}
                 </div>
               )}
 
