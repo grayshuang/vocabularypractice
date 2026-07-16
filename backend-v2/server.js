@@ -335,12 +335,13 @@ ${levelBlock}
 5. 干扰项必须与正确答案词性相同、难度相当、但意思不同
 6. chinese 字段必须是对应英文句子的**完整中文翻译**（逐字对应级别），要涵盖英文句子中的**每一个**信息点，不能省略任何从句、修饰语或细节。学生需要靠中文理解整句英文的全部含义。
 7. 句子（含空白标记 ______，空白计 1 个词）总长度建议控制在 25 个单词以内，允许适度使用雅思常见复杂句型（让步状语从句、定语从句、分词结构等），但避免过于冗长的嵌套从句链
-8. **以下字段绝对禁止包含任何中文字符**：word、options、correct_answer、definition、option_defs。这些字段必须100%纯英文。只有 chinese 字段可以包含中文。
+8. **以下字段绝对禁止包含任何中文字符或词性标注（adj./v./n.等）**：word、options、correct_answer、definition、option_defs、sentence。这些字段必须100%纯英文。只有 chinese 字段可以包含中文。
+9. **sentence 字段中禁止原样复制词汇列表中的原始格式**（如 "implement v."、"dense adj. 浓密"）。句子中只能出现该词的**纯英文形式**（如 "implement"、"dense"），绝不能附带词性或中文。
 
 【字段说明】
 - word: **纯英文词汇**（仅英文单词，禁止包含中文、词性标注或释义）
 - pos: 词性 (adj/n/v/adv/phrase)
-- sentence: 含______的完整句子
+- sentence: **纯英文**含______的完整句子（禁止包含中文、词性标注或原始词汇格式）
 - options: [正确答案, 干扰项1, 干扰项2, 干扰项3] 共4个（每个仅英文单词）
 - correct_answer: 正确答案（仅英文单词）
 - topic_category: 雅思话题类别（从以下选一个）：教育类/科技类/环境类/社会类/政府类/文化类/健康类/工作类/媒体类/犯罪类/全球化类/城市化类
@@ -423,6 +424,7 @@ ${JSON.stringify(wordBatch)}
       if (!q) return;
       if (q.word) q.word = cleanWordEntry(q.word);           // 用更强力的 cleanWordEntry
       if (q.correct_answer) q.correct_answer = cleanWordEntry(q.correct_answer);
+      if (q.sentence) q.sentence = stripChinese(q.sentence);   // 句子也不能含中文/词性
       if (Array.isArray(q.options)) q.options = q.options.map(cleanWordEntry);
       if (q.definition) {
         q.definition = stripChinese(q.definition);
@@ -490,17 +492,20 @@ function generateFallback(words, level, batchIndex) {
 async function generateQuestionsWithAI(vocabularyList, level) {
   if (!vocabularyList || vocabularyList.length === 0) return [];
 
+  // 【关键】入口处统一清洗：确保传给AI的词汇100%纯英文，绝不带中文/词性
+  const cleanList = vocabularyList.map(cleanWordEntry);
+
   // 如果词汇数 <= BATCH_SIZE，直接生成
-  if (vocabularyList.length <= BATCH_SIZE) {
-    return await generateBatchWithAI(vocabularyList, level, 0, 1);
+  if (cleanList.length <= BATCH_SIZE) {
+    return await generateBatchWithAI(cleanList, level, 0, 1);
   }
 
   // 分批生成
-  const totalBatches = Math.ceil(vocabularyList.length / BATCH_SIZE);
+  const totalBatches = Math.ceil(cleanList.length / BATCH_SIZE);
   const batchPromises = [];
 
-  for (let i = 0; i < vocabularyList.length; i += BATCH_SIZE) {
-    const batch = vocabularyList.slice(i, i + BATCH_SIZE);
+  for (let i = 0; i < cleanList.length; i += BATCH_SIZE) {
+    const batch = cleanList.slice(i, i + BATCH_SIZE);
     const batchIndex = Math.floor(i / BATCH_SIZE);
     batchPromises.push(generateBatchWithAI(batch, level, batchIndex, totalBatches));
   }
@@ -540,7 +545,7 @@ async function getQuestionsCached(vocabularyList, level) {
     if (hit) {
       result.push(applyWordCase(hit, w));
     } else {
-      missing.push(rawW);  // 未命中时传原始值给AI（让AI自己提取词义）
+      missing.push(w);  // 传清洗后的纯英文词给AI（禁止把中文/词性传入prompt）
     }
   }
 
@@ -595,6 +600,7 @@ async function getQuestionsCached(vocabularyList, level) {
       ...q,
       word: q.word ? cleanWordEntry(q.word) : q.word,
       correct_answer: q.correct_answer ? cleanWordEntry(q.correct_answer) : q.correct_answer,
+      sentence: q.sentence ? finalStrip(q.sentence) : q.sentence,
       options: Array.isArray(q.options) ? q.options.map(cleanWordEntry) : q.options,
       definition: q.definition ? finalStrip(q.definition) : q.definition,
       option_defs: Array.isArray(q.option_defs) ? q.option_defs.map(finalStrip) : q.option_defs,

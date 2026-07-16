@@ -61,12 +61,13 @@ function spellingDef(q) {
   return '';
 }
 
-/** 前端安全网：去掉字符串中的中文和词性标注（adj./v. 等），无论是否后接中文 */
+/** 前端安全网：去掉字符串中的中文和词性标注（adj./v. 等），无论是否后接中文、是否有空格 */
 function stripChinese(s) {
   if (typeof s !== 'string') return s || '';
   return s
     .replace(/[一-鿿㐀-䶿]/g, '')                                                       // 去掉所有中文字符
-    .replace(/(^|\s)(?:adj|adv|prep|conj|pron|det|int|aux|art|num|abbr|phr|vi|vt|n|v)\.?(?=\s|$)/gi, '$1') // 去掉独立词性标注
+    .replace(/(?:^|\s)(?:adj|adv|prep|conj|pron|det|int|aux|art|num|abbr|phr|vi|vt|n|v)\.?(?=\s|$)/gi, ' ') // 独立词性标注（前后有空格/行首尾）
+    .replace(/[_\-](?:adj|adv|prep|conj|pron|det|int|aux|art|num|abbr|phr|vi|vt|n|v)\.?/gi, '')     // 无空格附着词性（drain_v / dense-adj）
     .replace(/\s*[（（][^））]*[））]\s*/g, ' ')                                          // 去掉括号注释
     .replace(/\s*\([^)]*\)\s*/g, ' ')
     .replace(/\s+/g, ' ')
@@ -124,11 +125,13 @@ function firstLetterHint(word) {
   const cleaned = stripChinese(word);
   const parts = cleaned.split(/\s+/).filter(Boolean);
   return parts.map(p => {
-    // 只对纯英文部分生成提示
+    // 只对纯英文部分生成提示（跳过类词性碎片如 "v" "adj" "n" 等）
     const en = p.replace(/[^a-zA-Z\-']/g, '');
-    if (en.length <= 1) return en;
+    if (en.length <= 1) return '';   // 单字符或空→不显示
+    // 额外安全网：如果片段本身像词性标注（adj/adv/v/n等），跳过
+    if (/^(?:adj|adv|v|n|prep|conj|pron|det|vi|vt|int|aux|phr|abbr)$/i.test(en)) return '';
     return en[0] + '_'.repeat(en.length - 1);
-  }).join(' ');
+  }).filter(Boolean).join(' ') || '(空，靠句子+首字母提示推断)';
 }
 
 // 发音朗读（Web Speech API）
