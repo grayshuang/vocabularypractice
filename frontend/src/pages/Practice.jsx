@@ -7,7 +7,15 @@ import { MODES, modeLabel, modeDesc } from '../modes';
 /* ── 工具函数 ── */
 function fullSentence(q) {
   if (!q) return '';
-  return (q.sentence || '').replace(/_{4,}/, q.correct_answer || q.word || '');
+  let s = (q.sentence || '').replace(/_{4,}/, q.correct_answer || q.word || '');
+  // 规范化：确保首字母大写 + 句末有标点
+  s = s.trim();
+  if (s.length > 0) {
+    s = s[0].toUpperCase() + s.slice(1);
+    // 句末无中英文标点则补句号
+    if (!/[.!?。！？]$/.test(s)) s += '.';
+  }
+  return s;
 }
 // 原句截断：最长 maxWords 个单词（空白 ______ 计 1 个词），超长则从较长一侧在逗号/连词处自然切断，保留空白
 function truncateSentenceForSearch(sentence, maxWords = 15) {
@@ -136,13 +144,42 @@ function firstLetterHint(word) {
 
 // 发音朗读（Web Speech API）
 function speakWord(word) {
-  if (!word || !window.speechSynthesis) return;
-  const text = stripChinese(String(word)).trim() || String(word);
+  const raw = String(word || '').trim();
+  if (!raw) { console.warn('[speakWord] 空词，跳过'); return; }
+  if (!window.speechSynthesis) { console.warn('[speakWord] 浏览器不支持 SpeechSynthesis'); return; }
+
+  // 清洗但保留纯英文内容（如果清洗后为空则用原始值兜底）
+  let text = stripChinese(raw).trim();
+  if (!text || text.length < 1) text = raw;
+  if (text.length < 1) { console.warn('[speakWord] 清洗后仍为空:', raw); return; }
+
+  console.log('[speakWord] 朗读:', text);
   window.speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = 'en-US';
-  u.rate = 0.85;
-  window.speechSynthesis.speak(u);
+
+  // 某些浏览器需要先 speak 一个空 utterance 来"唤醒"语音引擎
+  try {
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'en-US';
+    u.rate = 0.85;
+    u.onstart = () => console.log('[speakWord] 开始朗读');
+    u.onerror = (e) => console.warn('[speakWord] TTS错误:', e.error);
+    u.onend = () => console.log('[speakWord] 朗读结束');
+
+    // 如果 speechSynthesis 处于暂停状态（Chrome 已知 bug），先取消再 speak
+    window.speechSynthesis.speak(u);
+
+    // Chrome 修复：部分版本在后台标签页时 speechSynthesis 不触发
+    // 通过 setTimeout 二次尝试
+    setTimeout(() => {
+      if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
+        console.log('[speakWord] 首次未触发，重试...');
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+      }
+    }, 300);
+  } catch (e) {
+    console.error('[speakWord] 异常:', e);
+  }
 }
 
 /* ── 语块分词器（组词成句用：把句子拆成语块/意群，而非单个词） ── */
@@ -1005,8 +1042,16 @@ function SentenceSearch({ q, initialResult, onCommit, onSolved, distractorPool }
               </button>
             </>
           )}
-          <button onClick={() => evaluate(selected)} disabled={solved || selected.length !== target.length}
-            className="text-[11px] px-3 py-1 rounded bg-gray-800 text-white disabled:opacity-40">检查</button>
+          <button onClick={() => {
+            if (selected.length === 0) { setStatus('wrong'); setTimeout(() => setStatus(null), 500); return; }
+            if (selected.length < target.length) {
+              setStatus('wrong');
+              setTimeout(() => { if (!solved) setStatus(null); }, 800);
+              return;
+            }
+            evaluate(selected);
+          }} disabled={solved || selected.length === 0}
+            className={'text-[11px] px-3 py-1 rounded ' + (selected.length < target.length && selected.length > 0 ? 'bg-gray-400 text-white cursor-not-allowed' : 'bg-gray-800 text-white hover:bg-gray-700 disabled:opacity-40')}>检查</button>
         </div>
       </div>
       {solved && status === 'correct' && (

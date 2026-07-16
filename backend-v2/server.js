@@ -350,6 +350,7 @@ ${levelBlock}
 7. 句子（含空白标记 ______，空白计 1 个词）总长度建议控制在 25 个单词以内，允许适度使用雅思常见复杂句型，但避免过于冗长的嵌套从句链。
 8. **以下字段绝对禁止包含任何中文字符或词性标注（adj./v./n.等）**：word、options、correct_answer、definition、option_defs、sentence。这些字段必须100%纯英文。只有 chinese 字段可以包含中文。
 9. **sentence 字段中禁止原样复制词汇列表中的原始格式**（如 "implement v."、"dense adj. 浓密"）。句子中只能出现该词的**纯英文形式**（如 "implement"、"dense"），绝不能附带词性或中文。
+10. **sentence 必须是语法完整、标点正确的句子**：首字母必须大写，句末必须有英文标点（. ? !），不能是截断的片段。这个句子会直接展示给学生作为「原句」参考。
 
 【字段说明】
 - word: **纯英文词汇**（仅英文单词，禁止包含中文、词性标注或释义）
@@ -438,7 +439,16 @@ ${JSON.stringify(wordBatch)}
       if (!q) return;
       if (q.word) q.word = cleanWordEntry(q.word);           // 用更强力的 cleanWordEntry
       if (q.correct_answer) q.correct_answer = cleanWordEntry(q.correct_answer);
-      if (q.sentence) q.sentence = stripChinese(q.sentence);   // 句子也不能含中文/词性
+      if (q.sentence) {
+        q.sentence = stripChinese(q.sentence);   // 句子也不能含中文/词性
+        // 规范化：确保首字母大写 + 句末有标点
+        let s = q.sentence.trim();
+        if (s.length > 0) {
+          s = s[0].toUpperCase() + s.slice(1);
+          if (!/[.!?]$/.test(s)) s += '.';
+          q.sentence = s;
+        }
+      }
       if (Array.isArray(q.options)) q.options = q.options.map(cleanWordEntry);
       if (q.definition) {
         q.definition = stripChinese(q.definition);
@@ -615,7 +625,17 @@ async function getQuestionsCached(vocabularyList, level) {
       ...q,
       word: q.word ? cleanWordEntry(q.word) : q.word,
       correct_answer: q.correct_answer ? cleanWordEntry(q.correct_answer) : q.correct_answer,
-      sentence: q.sentence ? finalStrip(q.sentence) : q.sentence,
+      sentence: (() => {
+        if (!q.sentence) return q.sentence;
+        let s = finalStrip(q.sentence);
+        // 规范化：首字母大写 + 句末标点
+        s = s.trim();
+        if (s.length > 0) {
+          s = s[0].toUpperCase() + s.slice(1);
+          if (!/[.!?]$/.test(s)) s += '.';
+        }
+        return s;
+      })(),
       options: Array.isArray(q.options) ? q.options.map(cleanWordEntry) : q.options,
       definition: q.definition ? finalStrip(q.definition) : q.definition,
       option_defs: Array.isArray(q.option_defs) ? q.option_defs.map(finalStrip) : q.option_defs,
