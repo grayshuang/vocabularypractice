@@ -279,35 +279,38 @@ const THINKING_TAGS = [
 // 高质量降级模板库（按词性分类，每个词有独立句子）
 const FALLBACK_TEMPLATES = {
   adj: [
-    { t: "Many people consider {w} to be an essential quality in modern society.", c: "许多人认为{w}是现代社会中一种必不可少的品质。" },
-    { t: "Being {w} can have a significant impact on one's personal and professional life.", c: "{w}会对一个人的生活和事业产生重大影响。" },
-    { t: "In today's competitive world, it is increasingly important to remain {w}.", c: "在当今竞争激烈的世界中，保持{w}变得越来越重要。" },
-    { t: "Those who are {w} tend to achieve greater success in their endeavors.", c: "那些{w}的人往往在他们的努力中取得更大的成功。" },
-    { t: "I believe that being {w} is far more valuable than having natural talent.", c: "我相信，{w}比拥有天赋更有价值。" },
+    { t: "A {w} approach to the problem has produced noticeably better outcomes than expected.", c: "用{w}的方法处理这个问题，产生的效果明显优于预期。" },
+    { t: "The {w} design of the new policy has drawn both praise and criticism from experts.", c: "这项新政策{w}的设计既赢得了专家的赞许，也招来了批评。" },
+    { t: "Such {w} conditions are rarely found in densely populated metropolitan areas.", c: "这种{w}的条件在人口稠密的大都市地区很少见。" },
+    { t: "Critics describe the proposal as {w}, arguing it ignores long-term consequences.", c: "批评者将该提案描述为{w}，认为它忽视了长期后果。" },
+    { t: "The {w} contrast between the two regions reflects deeper structural inequalities.", c: "两个地区之间{w}的对比，反映了更深层的结构性不平等。" },
   ],
   n: [
-    { t: "The concept of {w} has gained increasing attention in recent years.", c: "近年来，{w}这一概念越来越受到关注。" },
-    { t: "Many experts argue that {w} plays a crucial role in our daily lives.", c: "许多专家认为，{w}在我们的日常生活中起着至关重要的作用。" },
-    { t: "Without proper {w}, it would be difficult to maintain a healthy lifestyle.", c: "如果没有适当的{w}，很难维持健康的生活方式。" },
-    { t: "The importance of {w} cannot be overstated when it comes to personal development.", c: "就个人发展而言，{w}的重要性怎么强调都不为过。" },
-    { t: "A growing number of people have come to appreciate the value of {w}.", c: "越来越多的人开始认识到{w}的价值。" },
+    { t: "The recent debate over {w} has divided public opinion across the country.", c: "最近关于{w}的争论在全国范围内使公众意见出现分歧。" },
+    { t: "Surveys indicate that {w} varies significantly between urban and rural regions.", c: "调查显示，{w}在城市和农村地区之间存在显著差异。" },
+    { t: "Policymakers are under growing pressure to address the issue of {w}.", c: "政策制定者正面临越来越大的压力，需要解决{w}的问题。" },
+    { t: "Few would deny that {w} has reshaped the way younger generations think.", c: "很少有人会否认，{w}已经重塑了年轻一代的思维方式。" },
+    { t: "The long-term consequences of {w} remain a subject of intense academic study.", c: "{w}的长期影响仍然是学术研究高度关注的课题。" },
   ],
   v: [
-    { t: "If we want to succeed, we must learn how to {w} effectively.", c: "如果我们想成功，就必须学会如何有效地{w}。" },
-    { t: "Those who consistently {w} are more likely to achieve their goals.", c: "那些持续{w}的人更有可能实现他们的目标。" },
-    { t: "It is essential to {w} if we wish to make progress in this area.", c: "如果我们希望在这个领域取得进步，{w}是必不可少的。" },
-    { t: "Many people fail to realize the importance of learning to {w}.", c: "许多人没有意识到学会{w}的重要性。" },
-    { t: "The ability to {w} properly distinguishes successful people from others.", c: "正确{w}的能力是成功者与普通人的区别所在。" },
+    { t: "Authorities have pledged to {w} the new measures before the end of the year.", c: "当局已承诺在年底前{w}新措施。" },
+    { t: "Critics warn that failing to {w} could expose the system to serious risks.", c: "批评者警告，若不{w}，可能会使系统面临严重风险。" },
+    { t: "Gradually, communities began to {w} as part of their everyday routines.", c: "渐渐地，社区开始将{w}作为日常惯例的一部分。" },
+    { t: "The report urges citizens to {w} rather than wait for external intervention.", c: "报告敦促市民{w}，而不是等待外部干预。" },
+    { t: "Economists predict that companies will {w} to stay competitive in the market.", c: "经济学家预测，企业将会{w}以在市场中保持竞争力。" },
   ],
   phrase: [
-    { t: "In many cultures, people often {w} as a sign of respect or affection.", c: "在许多文化中，人们经常{w}，以此表示尊重或喜爱。" },
-    { t: "It is quite common to {w} in close relationships.", c: "在亲密关系中，{w}是很常见的。" },
-    { t: "When you {w}, it shows that you truly care about the other person.", c: "当你{w}时，表明你真正关心对方。" },
-    { t: "Most people would agree that it is better to {w} than to ignore the issue.", c: "大多数人会同意，与其忽视这个问题，不如{w}。" },
+    { t: "Officials announced a plan to {w} across all major public institutions.", c: "官员宣布了一项在所有主要公共机构中{w}的计划。" },
+    { t: "The campaign encourages young people to {w} instead of relying on shortcuts.", c: "该运动鼓励年轻人{w}，而不是依赖捷径。" },
+    { t: "Researchers found it easier to {w} when clear guidelines were provided.", c: "研究人员发现，在提供明确指引时，{w}更容易实现。" },
+    { t: "Local communities were asked to {w} in order to reduce overall waste.", c: "当地社区被要求{w}，以减少总体浪费。" },
   ]
 };
 
 const BATCH_SIZE = 10;
+// 词库缓存版本号：每次修改题目生成质量（如修复模板句/脏数据）后 +1，
+// 旧版本缓存自动失效，下次请求强制重新 AI 生成干净句子，无需手动清库。
+const CACHE_VERSION = 3;
 
 // 不同目标分数对应的句子复杂度指导（注入到 AI 生成 prompt）
 const LEVEL_GUIDE = {
@@ -328,13 +331,23 @@ ${levelBlock}
 - 尽量所有句子都是雅思口语 Part 3 的回答风格：探讨社会、教育、科技、环境等宏观/抽象话题，使用客观论证而非个人经历叙述。
 
 【严格规则】
-1. 每个词必须生成一个独立、不同的句子。绝对禁止所有词使用相同句型！
-2. 句子中用 ______ 表示空白处，正确答案就是该词本身
-3. 句子必须是雅思口语Part3的回答风格（复杂句型：让步状语从句、定语从句、分词结构等）
-4. 必须正确判断并使用该词的词性（adj/v/n/adv/phrase），确保语法完全正确
-5. 干扰项必须与正确答案词性相同、难度相当、但意思不同
+1. 每个词必须生成**语义上真正贴合该词自身含义**的独特句子，绝不能套用通用模板！
+   ❌ 绝对禁止的「假例句」写法（这类句子无论换成哪个词都成立，毫无针对性）：
+      - "We think [词] is important." / "We believe [词] matters."
+      - "We learned [词] from this experience."
+      - "[词] plays a crucial role in our daily lives."（对每个词都这么说）
+      - "The importance of [词] cannot be overstated."
+      - 任何把词条当主语/宾语随意塞进固定句型的写法
+   ✅ 正确写法：句子内容必须围绕该词**具体的、真实的含义**展开，例如：
+      - dense（稠密的）："The ______ fog made it nearly impossible to see the road ahead."
+      - implement（实施）："Local governments must ______ the new environmental policies without delay."
+      - hype（炒作）："Media ______ around the product faded once its flaws were exposed."
+2. 句子中用 ______ 表示空白处，正确答案就是该词本身（词形须与句子语法一致，必要时用正确时态/单复数）。
+3. 句子必须是雅思口语 Part3 风格：探讨社会、教育、科技、环境等宏观抽象话题，用客观论证而非 "I think/believe" 个人叙述；使用复杂句型（让步/定语/分词结构）。
+4. 必须正确判断并使用该词的词性，确保语法完全正确（注意动词时态、名词单复数、形容词位置）。
+5. 干扰项必须与正确答案词性相同、难度相当、但意思不同，且不能是模板套话。
 6. chinese 字段必须是对应英文句子的**完整中文翻译**（逐字对应级别），要涵盖英文句子中的**每一个**信息点，不能省略任何从句、修饰语或细节。学生需要靠中文理解整句英文的全部含义。
-7. 句子（含空白标记 ______，空白计 1 个词）总长度建议控制在 25 个单词以内，允许适度使用雅思常见复杂句型（让步状语从句、定语从句、分词结构等），但避免过于冗长的嵌套从句链
+7. 句子（含空白标记 ______，空白计 1 个词）总长度建议控制在 25 个单词以内，允许适度使用雅思常见复杂句型，但避免过于冗长的嵌套从句链。
 8. **以下字段绝对禁止包含任何中文字符或词性标注（adj./v./n.等）**：word、options、correct_answer、definition、option_defs、sentence。这些字段必须100%纯英文。只有 chinese 字段可以包含中文。
 9. **sentence 字段中禁止原样复制词汇列表中的原始格式**（如 "implement v."、"dense adj. 浓密"）。句子中只能出现该词的**纯英文形式**（如 "implement"、"dense"），绝不能附带词性或中文。
 
@@ -372,7 +385,8 @@ ${JSON.stringify(wordBatch)}
 ]
 
 重要：
-- 每个词的句子必须不同！根据词义量身定制句子内容
+- 每个词的句子必须**根据词义量身定制**，内容要体现该词具体是什么意思、在什么语境下用。宁可句子结构相似，也绝不能用"X is important"这种放之四海皆准的废话。
+- 自检：把生成的句子里的词换成另一个词，如果句子依然通顺且"没毛病"，说明你在套模板——重写！
 - 一共生成 ${wordBatch.length} 道
 - 只返回JSON数组`;
 
@@ -540,8 +554,8 @@ async function getQuestionsCached(vocabularyList, level) {
     const rawW = vocabularyList[i];
     const w = cleanedList[i];   // 用清洗后的词做缓存查找
     const key = w.toLowerCase();
-    // 命中条件：同词且同目标水平（不同水平生成不同难度的句子）
-    const hit = bank.find(b => b.word.toLowerCase() === key && (b.level || '6') === lv);
+    // 命中条件：同词 + 同目标水平 + 同缓存版本（旧版本模板句/脏数据强制失效重生成）
+    const hit = bank.find(b => b.word.toLowerCase() === key && (b.level || '6') === lv && (b.cache_version || 0) === CACHE_VERSION);
     if (hit) {
       result.push(applyWordCase(hit, w));
     } else {
@@ -562,6 +576,7 @@ async function getQuestionsCached(vocabularyList, level) {
         bank.push({
           word: q.word,
           level: lv,
+          cache_version: CACHE_VERSION,
           pos: q.pos || '',
           sentence: q.sentence || '',
           options: q.options || [],
