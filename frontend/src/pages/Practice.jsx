@@ -74,7 +74,7 @@ function stripChinese(s) {
   if (typeof s !== 'string') return s || '';
   return s
     .replace(/[一-鿿㐀-䶿]/g, '')                                                       // 去掉所有中文字符
-    .replace(/(?:^|\s)(?:adj|adv|prep|conj|pron|det|int|aux|art|num|abbr|phr|vi|vt|n|v)\.?(?=\s|$)/gi, ' ') // 独立词性标注（前后有空格/行首尾）
+    .replace(/(?:^|\s)(?:adj|adv|prep|conj|pron|det|int|aux|art|num|abbr|phr|vi|vt|n|v)\.?(?=[\s,，.;；、。！？!?]|\)|$)/gi, ' ') // 独立词性标注（含标点后缀）
     .replace(/[_\-](?:adj|adv|prep|conj|pron|det|int|aux|art|num|abbr|phr|vi|vt|n|v)\.?/gi, '')     // 无空格附着词性（drain_v / dense-adj）
     .replace(/\s*[（（][^））]*[））]\s*/g, ' ')                                          // 去掉括号注释
     .replace(/\s*\([^)]*\)\s*/g, ' ')
@@ -443,8 +443,8 @@ function OptionGrid({ q, selectedWord, isCorrect, onSelect }) {
         }
         return (
           <button key={i} onClick={() => onSelect(opt)} disabled={isCorrect !== null} className={'py-2.5 px-3 ' + cls}>
-            <span className="text-gray-300 mr-1.5 text-xs">{String.fromCharCode(65 + i)}.</span><span className="font-medium">{opt}</span>
-            {isCorrect !== null && <div className="text-[10px] mt-1 opacity-70">{(q.option_defs && q.option_defs[i]) ? (isRight ? '✓ ' : '') + q.option_defs[i] : ''}</div>}
+            <span className="text-gray-300 mr-1.5 text-xs">{String.fromCharCode(65 + i)}.</span><span className="font-medium">{stripChinese(opt)}</span>
+            {isCorrect !== null && <div className="text-[10px] mt-1 opacity-70">{(q.option_defs && q.option_defs[i]) ? (isRight ? '✓ ' : '') + stripChinese(q.option_defs[i]) : ''}</div>}
           </button>
         );
       })}
@@ -831,7 +831,7 @@ function CollocationBuilder({ q, initialResult, onCommit, onSolved }) {
       <p className="text-[11px] text-indigo-500 mb-1">搭配拼词 · 选出能组成地道搭配的词</p>
       <p className="text-2xl font-bold text-gray-800 mb-1">{stripChinese(q.word)} <span className="text-gray-300">+</span> ______</p>
       {q.chinese && <p className="text-xs text-gray-400 mb-3">{q.chinese}</p>}
-      <p className="text-xs text-gray-500 mb-3 bg-gray-50 rounded px-2 py-1.5 leading-relaxed">{hint}</p>
+      <p className="text-xs text-gray-500 mb-3 bg-gray-50 rounded px-2 py-1.5 leading-relaxed">{stripChinese(hint)}</p>
       <div className="grid grid-cols-2 gap-2">
         {q.options.map((opt, i) => {
           let cls = 'border rounded-lg text-left transition text-sm px-3 py-2.5 ';
@@ -1856,7 +1856,7 @@ export default function Practice() {
             {/* 句子填空 / 词格找句：显示原句 */}
             {(mode === 'sentence_fill' || mode === 'sentence_search') && q?.sentence && (
               <p className="text-gray-600 leading-relaxed bg-white rounded px-2 py-1 border border-gray-100">
-                {typeof q.sentence === 'object' ? JSON.stringify(q.sentence) : String(q.sentence)}
+                {stripChinese(typeof q.sentence === 'object' ? JSON.stringify(q.sentence) : String(q.sentence))}
               </p>
             )}
 
@@ -2109,7 +2109,7 @@ export default function Practice() {
                 <>
                   {q.chinese && <p className="text-xs text-gray-400 mb-2 leading-relaxed">{q.chinese}</p>}
                   <p className="text-base leading-relaxed mb-4 text-gray-800">
-                    {(q.sentence || '').split(/_{4,}/).map((part, idx, arr) => (
+                    {stripChinese(q.sentence || '').split(/_{4,}/).map((part, idx, arr) => (
                       <span key={idx}>{part}{idx < arr.length - 1 && <span className="inline-block min-w-[80px] mx-0.5 border-b-2 border-indigo-300"></span>}</span>
                     ))}
                   </p>
@@ -2124,7 +2124,7 @@ export default function Practice() {
                           const isC = opt === q.correct_answer;
                           const def = (q.option_defs && q.option_defs[i]) || (isC ? q.definition : '');
                           return <div key={i} className="text-xs flex gap-1 text-yellow-800">
-                            <span>{String.fromCharCode(65 + i)}. {opt}</span>{def && <span className="opacity-80">— {def}</span>}{!def && <span className="opacity-50 italic">— (暂无)</span>}
+                            <span>{String.fromCharCode(65 + i)}. {stripChinese(opt)}</span>{def && <span className="opacity-80">— {stripChinese(def)}</span>}{!def && <span className="opacity-50 italic">— (暂无)</span>}
                           </div>;
                         })}
                       </div>

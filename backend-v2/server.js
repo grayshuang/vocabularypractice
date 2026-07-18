@@ -429,7 +429,7 @@ ${JSON.stringify(wordBatch)}
       if (typeof s !== 'string') return s || '';
       return s
         .replace(/[一-鿿㐀-䶿]/g, '')                                  // 去掉所有中文字符
-        .replace(/(^|\s)(?:adj|adv|prep|conj|pron|det|int|aux|art|num|abbr|phr|vi|vt|n|v)\.?(?=\s|$)/gi, '$1') // 去掉词性标注（无论是否后接中文）
+        .replace(/(^|\s)(?:adj|adv|prep|conj|pron|det|int|aux|art|num|abbr|phr|vi|vt|n|v)\.?(?=[\s,，.;；、。！？!?]|\)|$)/gi, '$1') // 去掉词性标注（含标点后缀）
         .replace(/\s*[（（][^））]*[））]\s*/g, ' ')                   // 去掉括号注释
         .replace(/\s*\([^)]*\)\s*/g, ' ')
         .replace(/\s+/g, ' ')
@@ -612,11 +612,11 @@ async function getQuestionsCached(vocabularyList, level) {
     if (typeof s !== 'string') return s || '';
     return s
       .replace(/[一-鿿㐀-䶿]/g, '')
-      .replace(/(^|\s)(?:adj|adv|prep|conj|pron|det|int|aux|art|num|abbr|phr|vi|vt|n|v)\.?(?=\s|$)/gi, '$1')
-      .replace(/\s*[（（][^））]*[））]\s*/g, ' ')
-      .replace(/\s*\([^)]*\)\s*/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+      // 词性标注后可能紧跟标点(,)或句尾，(?=...) 前瞻需覆盖标点
+      .replace(/(^|\s)(?:adj|adv|prep|conj|pron|det|int|aux|art|num|abbr|phr|vi|vt|n|v)\.?(?=[\s,，.;；、。！？!?]|\)|$)/gi, '$1')
+      .replace(/[\s,]*[（（][^））]*[））][\s,]*/g, ' ')
+      .replace(/[\s,]*\([^)]*\)[\s,]*/g, ' ')
+      .replace(/[\s,]+/g, ' ').trim()
   };
   const sanitized = result.map(q => {
     if (!q) return q;
@@ -1397,7 +1397,8 @@ app.get('/api/student/weak-words', authMiddleware, (req, res) => {
     const lim = parseInt(limit);
     if (!isNaN(lim) && lim > 0) weakWords = weakWords.slice(0, lim);
   }
-  res.json(weakWords);
+  // 兜底清洗：历史脏数据（早期版本存入的 "awareness n"）在读取时也需净化
+  res.json(weakWords.map(w => ({ ...w, word: cleanWordEntry(w.word) })));
 });
 
 // ==================== 教师数据查询 ====================
@@ -1440,10 +1441,10 @@ app.get('/api/teacher/room/:roomId/student/:studentId/details', authMiddleware, 
     const answers = db.practiceAnswers
       .filter(a => a.session_id === s.id)
       .map(a => ({
-        word: a.word,
+        word: cleanWordEntry(a.word),
         is_correct: a.is_correct === 1,
-        student_answer: a.student_answer,
-        correct_answer: a.correct_answer
+        student_answer: cleanWordEntry(a.student_answer),
+        correct_answer: cleanWordEntry(a.correct_answer)
       }));
     return {
       session_id: s.id,
@@ -1467,7 +1468,7 @@ app.get('/api/teacher/room/:roomId/word-stats', authMiddleware, (req, res) => {
   // 验证房间属于该教师
   const room = db.rooms.find(r => r.id === roomId);
   if (!room || room.teacher_id !== req.user.id) return res.status(403).json({ error: '无权限' });
-  res.json(db.wordStats.filter(ws => Number(ws.room_id) === roomId).sort((a, b) => b.error_rate - a.error_rate));
+  res.json(db.wordStats.filter(ws => Number(ws.room_id) === roomId).map(w => ({ ...w, word: cleanWordEntry(w.word) })).sort((a, b) => b.error_rate - a.error_rate));
 });
 
 // ==================== 管理员功能 ====================
