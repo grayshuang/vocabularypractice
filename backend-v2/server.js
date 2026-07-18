@@ -639,6 +639,8 @@ async function getQuestionsCached(vocabularyList, level) {
       options: Array.isArray(q.options) ? q.options.map(cleanWordEntry) : q.options,
       definition: q.definition ? finalStrip(q.definition) : q.definition,
       option_defs: Array.isArray(q.option_defs) ? q.option_defs.map(finalStrip) : q.option_defs,
+      chinese: q.chinese ? finalStrip(q.chinese) : q.chinese,
+      topic_category: q.topic_category || '',
     };
     // 定义若包含答案词本身则清空
     if (clean.definition && w && clean.definition.toLowerCase().includes(w)) clean.definition = '';

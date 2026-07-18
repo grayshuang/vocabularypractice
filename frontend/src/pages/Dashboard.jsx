@@ -77,6 +77,12 @@ export default function Dashboard() {
         unique.push(w);
       });
       if (unique.length === 0) { setError('请至少输入一个单词'); return; }
+      // 校验：检测中文、词性标注等非纯英文内容
+      const dirtyWords = unique.filter(w => /[一-鿿㐀-䶿]/.test(w) || /\s*(adj|adv|n|v|vi?|vt|prep|conj|pron|det|int|aux|art|num|abbr|phr)\.?\s*$/i.test(w));
+      if (dirtyWords.length > 0) {
+        setError('⚠️ 以下词条包含中文或词性标注，请只输入纯英文单词（一行一个或逗号分隔）：\n' + dirtyWords.join('、'));
+        return;
+      }
       setWords(unique);
       setStep(2);
       setError('');
@@ -428,7 +434,12 @@ export default function Dashboard() {
               {step === 1 && (
                 <div>
                   <h3 className="text-lg font-bold text-gray-800 mb-4">① 输入词汇</h3>
-                  <p className="text-sm text-gray-500 mb-4">支持英文逗号分隔，或每行一个单词</p>
+                  <p className="text-sm text-gray-500 mb-2">支持英文逗号分隔，或每行一个单词</p>
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
+                    <p className="text-xs text-amber-700 font-medium">📌 请确保只输入<strong>纯英文单词</strong>，不要包含中文释义、词性（adj./n./v.）或括号注释</p>
+                    <p className="text-xs text-amber-600 mt-0.5">正确示例：ubiquitous, detrimental, inevitable</p>
+                    <p className="text-xs text-red-500 mt-0.5">错误示例：ubiquitous adj. 普遍的, detrimental adj. 有害的</p>
+                  </div>
                   <textarea
                     value={vocabText}
                     onChange={e => setVocabText(e.target.value)}

@@ -30,20 +30,21 @@ export default function Login() {
           return;
         }
       } catch (err) {
-        // 不是学生，尝试教师
-      }
-      try {
-        res = await api.teacherLogin({ username, password });
-        if (res.token) {
-          setAuth(res.token, res.teacher, 'teacher');
-          navigate('/dashboard');
-          return;
+        // 不是学生，尝试教师（透出真实错误帮助诊断）
+        const studentErr = err && err.message ? err.message : '';
+        try {
+          res = await api.teacherLogin({ username, password });
+          if (res.token) {
+            setAuth(res.token, res.teacher, 'teacher');
+            navigate('/dashboard');
+            return;
+          }
+        } catch (err2) {
+          setError(studentErr || (err2 && err2.message) || '用户名或密码错误');
         }
-      } catch (err) {
-        setError('用户名或密码错误');
       }
     } catch (err) {
-      setError('登录失败，请重试');
+      setError(err && err.message ? err.message : '登录失败，请重试');
     } finally {
       setLoading(false);
     }

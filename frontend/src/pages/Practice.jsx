@@ -830,7 +830,7 @@ function CollocationBuilder({ q, initialResult, onCommit, onSolved }) {
     <div>
       <p className="text-[11px] text-indigo-500 mb-1">搭配拼词 · 选出能组成地道搭配的词</p>
       <p className="text-2xl font-bold text-gray-800 mb-1">{stripChinese(q.word)} <span className="text-gray-300">+</span> ______</p>
-      {q.chinese && <p className="text-xs text-gray-400 mb-3">{q.chinese}</p>}
+      {q.chinese && <p className="text-xs text-gray-400 mb-3">{stripChinese(q.chinese)}</p>}
       <p className="text-xs text-gray-500 mb-3 bg-gray-50 rounded px-2 py-1.5 leading-relaxed">{stripChinese(hint)}</p>
       <div className="grid grid-cols-2 gap-2">
         {q.options.map((opt, i) => {
@@ -988,7 +988,7 @@ function SentenceSearch({ q, initialResult, onCommit, onSolved, distractorPool }
   return (
     <div>
       <p className="text-[11px] text-indigo-500 mb-1">词格找句 · 点单词连成隐藏的句子</p>
-      {q.chinese && <p className="text-xs text-gray-500 mb-2">🔍 提示（中文）：{q.chinese}</p>}
+      {q.chinese && <p className="text-xs text-gray-500 mb-2">🔍 提示（中文）：{stripChinese(q.chinese)}</p>}
       <div className="relative mb-2">
         {/* SVG 虚线穿针 — 基于实际DOM坐标，不错位 */}
         {showHint && hintCoords && (
@@ -1116,7 +1116,7 @@ function LookAlike({ q, initialResult, onCommit, onSolved }) {
         <p className="text-xl font-bold text-indigo-800">{target}</p>
         {q.definition && stripChinese(q.definition) && <p className="text-[10px] text-indigo-400 mt-0.5">{stripChinese(q.definition)}</p>}
       </div>
-      {q.chinese && <p className="text-xs text-gray-500 mb-2">🔍 提示：{q.chinese}</p>}
+      {q.chinese && <p className="text-xs text-gray-500 mb-2">🔍 提示：{stripChinese(q.chinese)}</p>}
       {q.sentence && <p className="text-[10px] text-gray-400 mb-2 italic">"{q.sentence}"</p>}
       <div className="grid gap-1 mb-2" style={{ gridTemplateColumns: `repeat(${size}, 1fr)` }}>
         {grid.map((row, r) => row.map((w, c) => {
@@ -1862,7 +1862,7 @@ export default function Practice() {
 
             {/* 中文翻译 */}
             {q?.chinese && (
-              <p className="text-gray-500 italic">💬 {typeof q.chinese === 'object' ? JSON.stringify(q.chinese) : String(q.chinese)}</p>
+              <p className="text-gray-500 italic">💬 {typeof q.chinese === 'object' ? JSON.stringify(q.chinese) : stripChinese(String(q.chinese))}</p>
             )}
 
             {/* 学生答案 */}
@@ -2107,7 +2107,7 @@ export default function Practice() {
               {/* —— 句子填空 —— */}
               {activeMode === 'sentence_fill' && (
                 <>
-                  {q.chinese && <p className="text-xs text-gray-400 mb-2 leading-relaxed">{q.chinese}</p>}
+                  {q.chinese && <p className="text-xs text-gray-400 mb-2 leading-relaxed">{stripChinese(q.chinese)}</p>}
                   <p className="text-base leading-relaxed mb-4 text-gray-800">
                     {stripChinese(q.sentence || '').split(/_{4,}/).map((part, idx, arr) => (
                       <span key={idx}>{part}{idx < arr.length - 1 && <span className="inline-block min-w-[80px] mx-0.5 border-b-2 border-indigo-300"></span>}</span>
@@ -2262,7 +2262,7 @@ export default function Practice() {
                   {buildHintLevel >= 1 && !buildChecked && (
                     <div className="mb-2 px-3 py-2 rounded-lg bg-blue-50 border border-blue-100 space-y-1">
                       {buildHintLevel >= 1 && (q.chinese || q.zh) && (
-                        <p className="text-xs text-blue-800">{q.chinese || q.zh}</p>
+                        <p className="text-xs text-blue-800">{stripChinese(q.chinese || q.zh || '')}</p>
                       )}
                       {buildHintLevel >= 2 && (
                         <p className="text-xs text-blue-700 font-mono bg-white rounded px-2 py-1 mt-1">{getFirstHalfSentence(q)}</p>
@@ -2365,7 +2365,7 @@ export default function Practice() {
                   {chunkHintLevel >= 1 && !chunkChecked && (
                     <div className="mb-2 px-3 py-2 rounded-lg bg-blue-50 border border-blue-100 space-y-1">
                       {chunkHintLevel >= 1 && (q.chinese || q.zh) && (
-                        <p className="text-xs text-blue-800">{q.chinese || q.zh}</p>
+                        <p className="text-xs text-blue-800">{stripChinese(q.chinese || q.zh || '')}</p>
                       )}
                       {chunkHintLevel >= 2 && (
                         <p className="text-xs text-blue-700 font-mono bg-white rounded px-2 py-1 mt-1">{getFirstHalfSentence(q)}</p>

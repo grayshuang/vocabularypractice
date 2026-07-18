@@ -21,7 +21,8 @@ export default function TeacherLogin({ onSuccess }) {
         if (onSuccess) onSuccess();
       }
     } catch (err) {
-      setError(err.response?.data?.error || '用户名或密码错误');
+      const msg = err && err.message ? err.message : '登录失败，请检查用户名和密码';
+      setError(msg);
     } finally {
       setLoading(false);
     }
