@@ -419,6 +419,12 @@ async function readDBAsync() {
 function writeDB(data) {
   // 同步写入（兼容现有代码），PG 模式下标记脏数据异步刷盘
   if (pgReady && pool) {
+    // ⚠️ 防护：缓存尚未从数据库加载完成前，拒绝任何写入。
+    // 否则一次空数据写回会触发 pgWriteAll 的 TRUNCATE，清空整个数据库。
+    if (!_cacheLoaded) {
+      console.error('⚠️ [writeDB] 缓存尚未从数据库加载完成，拒绝写入（避免用空数据清空全库）');
+      return;
+    }
     _dirtyData = data;
     _cachedDB = data; // 立即更新缓存，确保同一次请求内后续 readDB 拿到最新
     _scheduleFlush();
@@ -435,12 +441,32 @@ function genId(arr) {
 let _cachedDB = null;
 let _dirtyData = null;
 let _flushTimer = null;
+let _cacheLoaded = false; // ✅ 防护：initDB 成功从 PG 加载数据后才置 true
+
+/**
+ * 危险空写检测：teachers / students / rooms 三张核心表同时为空时，
+ * 几乎必然是缓存损坏（而非真实业务），此时绝对不允许 TRUNCATE 写回，
+ * 否则会一次性清空整个数据库。
+ */
+function _isDangerousEmpty(data) {
+  if (!data) return true;
+  const t = (data.teachers || []).length;
+  const s = (data.students || []).length;
+  const r = (data.rooms || []).length;
+  return t === 0 && s === 0 && r === 0;
+}
 
 function _scheduleFlush() {
   if (_flushTimer) return; // 已有定时器等待中
   _flushTimer = setTimeout(async () => {
     _flushTimer = null;
     if (_dirtyData && pool) {
+      // ⚠️ 防护：核心表同时为空 = 缓存损坏，拒绝 TRUNCATE 写回
+      if (_isDangerousEmpty(_dirtyData)) {
+        console.error('⚠️ [flushDB] 检测到空数据集（teachers/students/rooms 全空），拒绝 TRUNCATE 写回，已放弃本次写盘以防清空全库');
+        _dirtyData = null;
+        return;
+      }
       try {
         await pgWriteAll(_dirtyData);
         _dirtyData = null;
@@ -458,6 +484,12 @@ async function flushDB() {
     _flushTimer = null;
   }
   if (_dirtyData && pool) {
+    // ⚠️ 防护：核心表同时为空 = 缓存损坏，拒绝 TRUNCATE 写回
+    if (_isDangerousEmpty(_dirtyData)) {
+      console.error('⚠️ [flushDB] 检测到空数据集（teachers/students/rooms 全空），拒绝 TRUNCATE 写回，已放弃本次写盘以防清空全库');
+      _dirtyData = null;
+      return;
+    }
     await pgWriteAll(_dirtyData);
     _dirtyData = null;
   }
@@ -471,6 +503,7 @@ async function initDB() {
         await ensureTables();
         pgReady = true;
         _cachedDB = await pgReadAll();
+        _cacheLoaded = true; // ✅ 数据已从 PG 真实加载，允许后续 writeDB
         console.log(`✅ 数据库已连接（PostgreSQL），缓存 ${Object.keys(_cachedDB).length} 张表`);
         console.log('超级管理员账号: admin / admin123456');
         return;

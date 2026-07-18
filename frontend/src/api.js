@@ -16,6 +16,8 @@ async function request(url, options = {}) {
 }
 
 export default {
+  // 通用 POST（用于未封装的接口，如密码重置）
+  post: (url, data) => request(url, { method: 'POST', body: JSON.stringify(data) }),
   // 学生
   studentRegister: (data) => request('/api/student/register', { method: 'POST', body: JSON.stringify(data) }),
   studentLogin: (data) => request('/api/student/login', { method: 'POST', body: JSON.stringify(data) }),
