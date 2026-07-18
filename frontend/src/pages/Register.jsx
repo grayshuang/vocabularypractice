@@ -39,7 +39,13 @@ export default function Register() {
         }
       }
     } catch (err) {
-      setError(err.response?.data?.error || '注册失败');
+      const msg = err && err.message ? err.message : '注册失败，请稍后重试';
+      // 后端返回的具体错误（如"用户名或邮箱已存在"）直接透出，并给出登录引导
+      if (msg.includes('已存在')) {
+        setError('该用户名或邮箱已注册过，请直接登录；若忘记密码请联系老师重置。');
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoading(false);
     }
