@@ -1406,10 +1406,11 @@ app.get('/api/teacher/room/:roomId/students', authMiddleware, (req, res) => {
   if (req.user.type !== 'teacher') return res.status(403).json({ error: '无权限' });
   const db = readDB();
   const roomId = parseInt(req.params.roomId);
-  // 合并：正式加入的学生 + 有过练习记录但没点加入的学生（去重）
+  // 合并：正式加入的学生 + 有过已完成练习记录但没点加入的学生（去重）
   const joinedIds = db.studentRooms.filter(sr => Number(sr.room_id) === roomId).map(sr => sr.student_id);
-  const practiceIds = db.practiceSessions
-    .filter(ps => Number(ps.room_id) === roomId)
+  // 只统计有 finished_at 的已完成会话，过滤掉点了开始但未提交的残留空记录
+  const finishedInRoom = db.practiceSessions.filter(ps => Number(ps.room_id) === roomId && ps.finished_at);
+  const practiceIds = finishedInRoom
     .map(ps => ps.student_id)
     .filter(id => !joinedIds.includes(id));
   const studentIds = [...new Set([...joinedIds, ...practiceIds])];
