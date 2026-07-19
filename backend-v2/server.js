@@ -368,35 +368,97 @@ const THINKING_TAGS = [
 ];
 
 // 高质量降级模板库（按词性分类，每个词有独立句子）
-const FALLBACK_TEMPLATES = {
-  adj: [
-    { t: "A {w} approach to the problem has produced noticeably better outcomes than expected.", c: "用{w}的方法处理这个问题，产生的效果明显优于预期。" },
-    { t: "The {w} design of the new policy has drawn both praise and criticism from experts.", c: "这项新政策{w}的设计既赢得了专家的赞许，也招来了批评。" },
-    { t: "Such {w} conditions are rarely found in densely populated metropolitan areas.", c: "这种{w}的条件在人口稠密的大都市地区很少见。" },
-    { t: "Critics describe the proposal as {w}, arguing it ignores long-term consequences.", c: "批评者将该提案描述为{w}，认为它忽视了长期后果。" },
-    { t: "The {w} contrast between the two regions reflects deeper structural inequalities.", c: "两个地区之间{w}的对比，反映了更深层的结构性不平等。" },
-  ],
-  n: [
-    { t: "The recent debate over {w} has divided public opinion across the country.", c: "最近关于{w}的争论在全国范围内使公众意见出现分歧。" },
-    { t: "Surveys indicate that {w} varies significantly between urban and rural regions.", c: "调查显示，{w}在城市和农村地区之间存在显著差异。" },
-    { t: "Policymakers are under growing pressure to address the issue of {w}.", c: "政策制定者正面临越来越大的压力，需要解决{w}的问题。" },
-    { t: "Few would deny that {w} has reshaped the way younger generations think.", c: "很少有人会否认，{w}已经重塑了年轻一代的思维方式。" },
-    { t: "The long-term consequences of {w} remain a subject of intense academic study.", c: "{w}的长期影响仍然是学术研究高度关注的课题。" },
-  ],
-  v: [
-    { t: "Authorities have pledged to {w} the new measures before the end of the year.", c: "当局已承诺在年底前{w}新措施。" },
-    { t: "Critics warn that failing to {w} could expose the system to serious risks.", c: "批评者警告，若不{w}，可能会使系统面临严重风险。" },
-    { t: "Gradually, communities began to {w} as part of their everyday routines.", c: "渐渐地，社区开始将{w}作为日常惯例的一部分。" },
-    { t: "The report urges citizens to {w} rather than wait for external intervention.", c: "报告敦促市民{w}，而不是等待外部干预。" },
-    { t: "Economists predict that companies will {w} to stay competitive in the market.", c: "经济学家预测，企业将会{w}以在市场中保持竞争力。" },
-  ],
-  phrase: [
-    { t: "Officials announced a plan to {w} across all major public institutions.", c: "官员宣布了一项在所有主要公共机构中{w}的计划。" },
-    { t: "The campaign encourages young people to {w} instead of relying on shortcuts.", c: "该运动鼓励年轻人{w}，而不是依赖捷径。" },
-    { t: "Researchers found it easier to {w} when clear guidelines were provided.", c: "研究人员发现，在提供明确指引时，{w}更容易实现。" },
-    { t: "Local communities were asked to {w} in order to reduce overall waste.", c: "当地社区被要求{w}，以减少总体浪费。" },
-  ]
+// 兜底模板：按【目标水平】×【词性】分级。AI 欠费/失败走 fallback 时，
+// 仍能根据教师所选等级(5/6/7+)生成明显不同复杂度的句子。
+// - 5 分：简单句，12-16 词，基础词汇，至多 1 个简单从句
+// - 6 分：含 1 个从句，15-22 词
+// - 7+ 分：高级复杂句型（让步/定语/分词/名词性从句），18-28 词
+const FALLBACK_TEMPLATES_BY_LEVEL = {
+  '5': {
+    adj: [
+      { t: "The new plan is very {w} and easy for most people to accept.", c: "这个新计划很{w}，大多数人都容易接受。" },
+      { t: "Many students think the topic is {w} but still useful to learn.", c: "很多学生觉得这个话题很{w}，但仍然值得学习。" },
+      { t: "This kind of food is {w} and popular among young people today.", c: "这种食物很{w}，如今在年轻人中很受欢迎。" },
+      { t: "The weather here is often {w}, so people plan their days carefully.", c: "这里的天气常常很{w}，所以人们会仔细安排日程。" },
+    ],
+    n: [
+      { t: "Many people talk about {w} in their daily life these days.", c: "如今很多人在日常生活中谈论{w}。" },
+      { t: "The government spends a lot of money on {w} every year.", c: "政府每年在{w}上花很多钱。" },
+      { t: "Young people today care more about {w} than before.", c: "如今的年轻人比以前更关心{w}。" },
+      { t: "In big cities, {w} is a common thing that people notice.", c: "在大城市里，{w}是人们常常注意到的事情。" },
+    ],
+    v: [
+      { t: "People should {w} more often to stay healthy and happy.", c: "人们应该多{w}，以保持健康和快乐。" },
+      { t: "Schools ask students to {w} as part of their daily study.", c: "学校要求学生把{w}作为日常学习的一部分。" },
+      { t: "It is good to {w} when you have free time at home.", c: "在家有空时{w}是件好事。" },
+      { t: "Parents often tell their children to {w} every day.", c: "父母常常叮嘱孩子每天{w}。" },
+    ],
+    phrase: [
+      { t: "Teachers often encourage students to {w} at school.", c: "老师常常鼓励学生在学校{w}。" },
+      { t: "Many families try to {w} together on weekends.", c: "很多家庭会在周末一起{w}。" },
+      { t: "People are asked to {w} in order to save money.", c: "人们被要求{w}，以便省钱。" },
+      { t: "It is helpful to {w} in everyday life.", c: "在日常生活中{w}很有帮助。" },
+    ],
+  },
+  '6': {
+    adj: [
+      { t: "A {w} approach to the problem has produced noticeably better outcomes than expected.", c: "用{w}的方法处理这个问题，产生的效果明显优于预期。" },
+      { t: "The {w} design of the new policy has drawn both praise and criticism from experts.", c: "这项新政策{w}的设计既赢得了专家的赞许，也招来了批评。" },
+      { t: "Such {w} conditions are rarely found in densely populated metropolitan areas.", c: "这种{w}的条件在人口稠密的大都市地区很少见。" },
+      { t: "Critics describe the proposal as {w}, arguing it ignores long-term consequences.", c: "批评者将该提案描述为{w}，认为它忽视了长期后果。" },
+      { t: "The {w} contrast between the two regions reflects deeper structural inequalities.", c: "两个地区之间{w}的对比，反映了更深层的结构性不平等。" },
+    ],
+    n: [
+      { t: "The recent debate over {w} has divided public opinion across the country.", c: "最近关于{w}的争论在全国范围内使公众意见出现分歧。" },
+      { t: "Surveys indicate that {w} varies significantly between urban and rural regions.", c: "调查显示，{w}在城市和农村地区之间存在显著差异。" },
+      { t: "Policymakers are under growing pressure to address the issue of {w}.", c: "政策制定者正面临越来越大的压力，需要解决{w}的问题。" },
+      { t: "Few would deny that {w} has reshaped the way younger generations think.", c: "很少有人会否认，{w}已经重塑了年轻一代的思维方式。" },
+      { t: "The long-term consequences of {w} remain a subject of intense academic study.", c: "{w}的长期影响仍然是学术研究高度关注的课题。" },
+    ],
+    v: [
+      { t: "Authorities have pledged to {w} the new measures before the end of the year.", c: "当局已承诺在年底前{w}新措施。" },
+      { t: "Critics warn that failing to {w} could expose the system to serious risks.", c: "批评者警告，若不{w}，可能会使系统面临严重风险。" },
+      { t: "Gradually, communities began to {w} as part of their everyday routines.", c: "渐渐地，社区开始将{w}作为日常惯例的一部分。" },
+      { t: "The report urges citizens to {w} rather than wait for external intervention.", c: "报告敦促市民{w}，而不是等待外部干预。" },
+      { t: "Economists predict that companies will {w} to stay competitive in the market.", c: "经济学家预测，企业将会{w}以在市场中保持竞争力。" },
+    ],
+    phrase: [
+      { t: "Officials announced a plan to {w} across all major public institutions.", c: "官员宣布了一项在所有主要公共机构中{w}的计划。" },
+      { t: "The campaign encourages young people to {w} instead of relying on shortcuts.", c: "该运动鼓励年轻人{w}，而不是依赖捷径。" },
+      { t: "Researchers found it easier to {w} when clear guidelines were provided.", c: "研究人员发现，在提供明确指引时，{w}更容易实现。" },
+      { t: "Local communities were asked to {w} in order to reduce overall waste.", c: "当地社区被要求{w}，以减少总体浪费。" },
+    ],
+  },
+  '7+': {
+    adj: [
+      { t: "Although the reform initially appeared {w}, its long-term implications, which few had anticipated, soon became a matter of national concern.", c: "尽管这项改革起初看起来{w}，但其少有人预料到的长期影响，很快成为全国关注的问题。" },
+      { t: "What makes the proposal particularly {w} is the way it reconciles competing interests that have long divided policymakers.", c: "这项提案之所以尤其{w}，在于它调和了长期以来使政策制定者产生分歧的各方利益。" },
+      { t: "Being inherently {w}, the strategy demands a level of coordination that most institutions, however well-funded, struggle to achieve.", c: "由于本质上{w}，该策略所要求的协调程度，是大多数机构（无论资金多么充裕）都难以达到的。" },
+      { t: "The {w} nature of the phenomenon, coupled with mounting economic pressure, has forced experts to reconsider long-held assumptions.", c: "这一现象{w}的本质，加上日益加剧的经济压力，迫使专家重新审视长期以来的假设。" },
+    ],
+    n: [
+      { t: "While {w} is frequently cited as a driver of progress, its uneven distribution across regions raises questions that remain largely unresolved.", c: "尽管{w}常被视为进步的推动力，但其在各地区分布不均，引发了迄今仍未解决的问题。" },
+      { t: "The debate surrounding {w}, which has intensified in recent years, reflects deeper tensions between economic growth and social equality.", c: "近年来愈演愈烈的关于{w}的争论，反映出经济增长与社会公平之间更深层的矛盾。" },
+      { t: "Far from being a marginal concern, {w} has emerged as a defining issue that shapes how societies allocate their limited resources.", c: "{w}远非无关紧要的问题，而已成为决定社会如何分配有限资源的关键议题。" },
+      { t: "What complicates the discussion of {w} is the extent to which cultural values, rather than mere policy, determine public attitudes.", c: "使关于{w}的讨论变得复杂的，是文化价值观（而非单纯的政策）在多大程度上决定了公众态度。" },
+    ],
+    v: [
+      { t: "Unless governments are willing to {w} decisively, the structural problems that underlie the crisis are unlikely to be resolved.", c: "除非政府愿意果断地{w}，否则潜藏于危机之下的结构性问题不太可能得到解决。" },
+      { t: "Having recognised the urgency of the situation, authorities have begun to {w}, though critics argue the measures remain insufficient.", c: "在认识到形势的紧迫后，当局已开始{w}，尽管批评者认为这些措施仍然不够。" },
+      { t: "The pressure to {w}, driven by both economic necessity and public expectation, has reshaped the priorities of major institutions.", c: "在经济需要和公众期待的双重驱动下，{w}的压力重塑了各大机构的优先事项。" },
+      { t: "Whereas earlier generations were reluctant to {w}, today's citizens increasingly regard it as an essential civic responsibility.", c: "早先几代人不愿{w}，而如今的公民则越来越将其视为一项重要的公民责任。" },
+    ],
+    phrase: [
+      { t: "In an era defined by rapid change, the capacity to {w} has become indispensable to those hoping to remain competitive.", c: "在一个以快速变革为特征的时代，{w}的能力对于希望保持竞争力的人而言已不可或缺。" },
+      { t: "Although it may seem straightforward to {w}, doing so consistently requires resources that many communities simply lack.", c: "尽管{w}看似简单，但要持之以恒地做到，需要许多社区根本不具备的资源。" },
+      { t: "The growing tendency to {w}, which reflects shifting social values, carries profound implications for future policy.", c: "{w}这一日益增长的趋势反映了社会价值观的变化，对未来政策具有深远影响。" },
+      { t: "Institutions that fail to {w}, however prestigious, risk losing relevance in an increasingly demanding environment.", c: "未能{w}的机构，无论多么有声望，都可能在要求日益苛刻的环境中失去存在价值。" },
+    ],
+  },
 };
+
+// 向后兼容别名：默认取 6 分模板（旧代码若直接引用 FALLBACK_TEMPLATES 不会崩溃）
+const FALLBACK_TEMPLATES = FALLBACK_TEMPLATES_BY_LEVEL['6'];
 
 const BATCH_SIZE = 10;
 
@@ -411,7 +473,7 @@ const COMMON_DISTRACTORS = [
 
 // 词库缓存版本号：每次修改题目生成质量（如修复模板句/脏数据）后 +1，
 // 旧版本缓存自动失效，下次请求强制重新 AI 生成干净句子，无需手动清库。
-const CACHE_VERSION = 9;
+const CACHE_VERSION = 10;
 
 // 不同目标分数对应的句子复杂度指导（注入到 AI 生成 prompt）
 const LEVEL_GUIDE = {
@@ -699,8 +761,19 @@ function fallbackDefForPos(pos, variant) {
  * - chinese 是整句的中文翻译（非单个词翻译）
  * - option_defs 尽量用真实词典释义，缺失则用词性兜底
  */
+/** 归一化 level 到模板级别键：'5' | '6' | '7+' */
+function normalizeLevelKey(level) {
+  const s = String(level || '6').toLowerCase();
+  if (/7|8|9|ielts|雅思|高|advanced|c1|c2/.test(s)) return '7+';
+  if (/5|初|elementary|a2|b1|基础|简单|easy/.test(s)) return '5';
+  return '6';
+}
+
 async function generateFallback(words, level, batchIndex, pool) {
   try {
+  const levelKey = normalizeLevelKey(level);
+  const TPL = FALLBACK_TEMPLATES_BY_LEVEL[levelKey] || FALLBACK_TEMPLATES_BY_LEVEL['6'];
+  const maxWords = levelKey === '5' ? 16 : (levelKey === '7+' ? 32 : 24);
   const cleaned = words.map(cleanWordEntry).filter(Boolean);
   const distractorPool = (pool && pool.length ? pool : words).map(cleanWordEntry).filter(Boolean);
   // 并行查所有目标词 + 干扰词池（确保干扰词也有释义可用）
@@ -721,15 +794,17 @@ async function generateFallback(words, level, batchIndex, pool) {
     const pos = info.pos || posGuess(word);
 
     let sentence;
-    if (info.example && info.example.toLowerCase().includes(word.toLowerCase()) && new RegExp(escapeRegExp(word), 'gi').test(info.example)) {
-      sentence = truncateSentence(info.example.replace(new RegExp(escapeRegExp(word), 'gi'), '______'), 28);
+    // 5 分级优先用分级模板（简单句），6/7+ 级可保留词典真实例句以获得更自然的语境
+    const useDictExample = levelKey !== '5' && info.example && info.example.toLowerCase().includes(word.toLowerCase()) && new RegExp(escapeRegExp(word), 'gi').test(info.example);
+    if (useDictExample) {
+      sentence = truncateSentence(info.example.replace(new RegExp(escapeRegExp(word), 'gi'), '______'), maxWords);
     } else {
-      const tb = FALLBACK_TEMPLATES[pos] || FALLBACK_TEMPLATES.n;
-      sentence = truncateSentence(tb[(i + batchIndex * BATCH_SIZE) % tb.length].t.replace('{w}', '______'), 28);
+      const tb = TPL[pos] || TPL.n;
+      sentence = truncateSentence(tb[(i + batchIndex * BATCH_SIZE) % tb.length].t.replace('{w}', '______'), maxWords);
     }
     if (!/_{4,}/.test(sentence)) {
-      const tb = FALLBACK_TEMPLATES[pos] || FALLBACK_TEMPLATES.n;
-      sentence = truncateSentence(tb[(i + batchIndex * BATCH_SIZE) % tb.length].t.replace('{w}', '______'), 28);
+      const tb = TPL[pos] || TPL.n;
+      sentence = truncateSentence(tb[(i + batchIndex * BATCH_SIZE) % tb.length].t.replace('{w}', '______'), maxWords);
     }
     sentence = sentence.trim();
     if (sentence.length > 0) {
@@ -777,7 +852,8 @@ async function generateFallback(words, level, batchIndex, pool) {
     let chinese = translations[i] || '';
     if (!chinese) chinese = info.chinese || '';
     if (!chinese) {
-      const tmplC = FALLBACK_TEMPLATES[pos] ? FALLBACK_TEMPLATES[pos][(i + batchIndex * BATCH_SIZE) % FALLBACK_TEMPLATES[pos].length].c : '';
+      const tmplArr = TPL[pos] || TPL.n;
+      const tmplC = tmplArr ? tmplArr[(i + batchIndex * BATCH_SIZE) % tmplArr.length].c : '';
       chinese = tmplC ? tmplC.replace('{w}', word) : '';
     }
     if (!chinese) chinese = '（翻译待补充）';
