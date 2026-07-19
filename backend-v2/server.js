@@ -17,7 +17,7 @@ const {
 } = require('./database');
 require('dotenv').config();
 
-const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY || 'sk-ws-H.EMMRIEX.R8AI.MEYCIQDJ1GJsAv151M-597KePV61HGBgNvQCCeSMk8t_cgSQ_gIhAN4qPEm62ug1YIIA4Qq920SmNn3JM2f13MpGhSCYy2a9';
+const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY || 'sk-ws-H.EMMRIEX.5Rcs.MEQCIDw9eY2qhOVq71hfdD5QOk9SFUhlMWyuPm6Wk1OJfQf6AiB1A5598ZiNIUk_IJtB7gnk8V5OjZjoDW9thE9fR5o5UQ';
 const JWT_SECRET = process.env.JWT_SECRET || 'vocab-practice-default-secret-change-me';
 const DASHSCOPE_API_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
 
