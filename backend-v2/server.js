@@ -725,10 +725,10 @@ async function generateFallback(words, level, batchIndex, pool) {
       if (!/[.!?]$/.test(sentence)) sentence += '.';
     }
 
-    // 中文：整句翻译（优先）→ 词级词典翻译（次选）→ 模板中文 → 占位符
-    const rawSentenceForTranslate = sentence.replace(/_{4,}/g, word); // 翻译时还原答案词
-    let chinese = await translateSentence(rawSentenceForTranslate);
-    if (!chinese) chinese = info.chinese || '';
+    // 中文：词级词典翻译（已并行查完）→ 模板中文 → 占位符
+    // 注意：不在此处调用 translateSentence（整句翻译需额外HTTP，串行等待会导致超时）
+    // 整句翻译作为后续优化，当前优先保证 fallback 响应速度（<5s 完成全批生成）
+    let chinese = info.chinese || '';
     if (!chinese) {
       const tmplC = FALLBACK_TEMPLATES[pos] ? FALLBACK_TEMPLATES[pos][(i + batchIndex * BATCH_SIZE) % FALLBACK_TEMPLATES[pos].length].c : '';
       chinese = tmplC ? tmplC.replace('{w}', word) : '';
