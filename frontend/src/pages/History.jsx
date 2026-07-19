@@ -3,6 +3,26 @@ import { useNavigate } from 'react-router-dom';
 import api from '../api';
 import { getDateRange, withinRange, formatDate } from '../utils/dateFilter';
 
+/* 模式标识符 → 中文短标签 */
+const MODE_LABELS = {
+  sentence_fill: '填空',
+  synonym: '同义',
+  match: '连线',
+  collocation: '搭配',
+  sentence_search: '词格',
+  lookalike: '形近',
+  sentence_build: '组词',
+  chunk_build: '拖曳',
+  spelling: '拼写',
+  flashcard: '闪卡',
+};
+
+/** 将 "sentence_fill,match,synonym" → "填空·连线·同义" */
+function formatModes(modeType) {
+  if (!modeType) return '';
+  return (modeType || '').split(',').filter(Boolean).map(m => MODE_LABELS[m.trim()] || m.trim()).join('·');
+}
+
 export default function History() {
   const [activeTab, setActiveTab] = useState('history');
   const [history, setHistory] = useState([]);
@@ -254,7 +274,7 @@ export default function History() {
                     <span className="text-gray-500">
                       答对 {h.correct_count}/{h.total_questions}
                     </span>
-                    <span className="text-gray-400">{h.mode_type}</span>
+                    <span className="text-gray-400">{formatModes(h.mode_type)}</span>
                   </div>
 
                   {/* 本条历史的备注 — 紧凑内联风格 */}
