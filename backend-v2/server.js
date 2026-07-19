@@ -474,7 +474,7 @@ const COMMON_DISTRACTORS = [
 
 // 词库缓存版本号：每次修改题目生成质量（如修复模板句/脏数据）后 +1，
 // 旧版本缓存自动失效，下次请求强制重新 AI 生成干净句子，无需手动清库。
-const CACHE_VERSION = 11;
+const CACHE_VERSION = 12;
 
 // 不同目标分数对应的句子复杂度指导（注入到 AI 生成 prompt）
 const LEVEL_GUIDE = {
@@ -886,6 +886,33 @@ function isGenericDefinition(def) {
 }
 
 /**
+ * 检测中文是否为模板套话（长段学术腔通用句式，与具体目标词无实质关联）。
+ * 这类中文由英文模板句经机器翻译而来，看起来"通顺"但放之四海皆准，
+ * 学生无法从中获得目标词的真实语义信息。
+ */
+function isTemplateChinese(cn) {
+  if (!cn || cn.length < 15) return false; // 短文本不可能是模板句
+  const TEMPLATE_CN_PATTERNS = [
+    /被视为.*进步的(推动力|驱动力|动力)/,
+    /被认为是.*进步的/,
+    /(在很大程度|迄今|仍然| largely ).*未(解决|回答|澄清|明确)/,
+    /(引发|造成|导致).*(问题|关注|争议|讨论)/,
+    /(长期以来|近年来|愈演愈烈).*关于/,
+    /(反映|重塑|改变|影响).*(方式|思维|格局|态度)/,
+    /无论.*多么.*都难以?/,
+    /在.*的双重驱动下/,
+    /远非.*而已成为/,
+    /使.*变得复杂.*的是/,
+    /(专家|当局|政策制定者|经济学家|批评者).*(认为|警告|敦促|预测|指出)/,
+    /(公众|社会|年轻一代|公民).*(越来越|日益|越来越)/,
+    /(结构性|深层的|长期的).*(影响|后果|矛盾|不平等)/,
+    /分配.*(有限|稀缺).*资源/,
+    /失去.*存在价值/,
+  ];
+  return TEMPLATE_CN_PATTERNS.some(p => p.test(cn));
+}
+
+/**
  * 高质量降级方案（AI 不可用时的兜底）：用免费词典 API 实时取每个词（含干扰词）的
  * 真实英文释义 / 中文翻译 / 例句，生成可用题目。保证：
  * - options ≥ 4 个不重复选项
@@ -979,15 +1006,22 @@ async function generateFallback(words, level, batchIndex, pool) {
       return fallbackDefForPos(posMap[oKey] || 'n', i + oi);
     });
 
-    // 中文优先级：整句并行翻译 > 词级词典翻译 > 模板中文 > 占位符
-    let chinese = translations[i] || '';
-    if (!chinese) chinese = info.chinese || '';
-    if (!chinese) {
+    // 中文优先级（修正：词级翻译优先，避免模板长句假中文）：
+    // 1. 词级词典中文（简洁准确，如 diverse → "多样的"）
+    // 2. 整句并行翻译（真实例句的中文翻译）
+    // 3. 模板中文（最后兜底，且必须过 isTemplateChinese 检测）
+    // 4. 占位符
+    let chinese = info.chinese || '';
+    if (!chinese || isTemplateChinese(chinese)) chinese = translations[i] || '';
+    if (!chinese || isTemplateChinese(chinese)) {
       const tmplArr = TPL[pos] || TPL.n;
       const tmplC = tmplArr ? tmplArr[(i + batchIndex * BATCH_SIZE) % tmplArr.length].c : '';
       chinese = tmplC ? tmplC.replace('{w}', word) : '';
     }
-    if (!chinese) chinese = '（翻译待补充）';
+    if (!chinese || isTemplateChinese(chinese)) {
+      // 模板中文也被判定为假套话 → 回退到词级占位（宁可短而准，不要长而假）
+      chinese = `（${word} 的中文释义）`;
+    }
 
     const topicCat = TOPIC_CATEGORIES[(i + batchIndex) % TOPIC_CATEGORIES.length];
     const thinkTag = THINKING_TAGS[i % THINKING_TAGS.length];
@@ -1054,6 +1088,7 @@ function isQuestionValid(q) {
   if (!/_{4,}/.test(s)) return false;                                           // 句子必须含挖空
   if (new RegExp('\\b' + escapeRegExp(w) + '\\b', 'i').test(s)) return false;   // 句子残留答案词（未被挖空）
   if (isTemplateSentence(s, w)) return false;                                   // 拦截模板句
+  if (isTemplateChinese(q.chinese)) return false;                             // 拦截中文模板套话
   return true;
 }
 
