@@ -14,6 +14,7 @@ export default function TeacherLogin({ onSuccess }) {
   // 忘记密码弹窗状态
   const [rEmail, setREmail] = useState('');
   const [rPassword, setRPassword] = useState('');
+  const [rPassword2, setRPassword2] = useState('');
   const [rMsg, setRMsg] = useState('');
   const [rLoading, setRLoading] = useState(false);
 
@@ -38,6 +39,14 @@ export default function TeacherLogin({ onSuccess }) {
   async function handleReset(e) {
     e.preventDefault();
     setRMsg('');
+    if (rPassword !== rPassword2) {
+      setRMsg('⚠️ 两次输入的密码不一致');
+      return;
+    }
+    if (String(rPassword).length < 4) {
+      setRMsg('⚠️ 新密码至少 4 位');
+      return;
+    }
     setRLoading(true);
     try {
       const res = await api.post('/api/teacher/reset-password', { email: rEmail, newPassword: rPassword });
@@ -81,7 +90,7 @@ export default function TeacherLogin({ onSuccess }) {
             <form onSubmit={handleReset} className="space-y-3">
               <input type="email" placeholder="注册邮箱" value={rEmail} onChange={e => setREmail(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" required />
               <input type="password" placeholder="新密码（至少 4 位）" value={rPassword} onChange={e => setRPassword(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" required />
-              <input type="password" placeholder="新密码（至少 4 位）" value={rPassword} onChange={e => setRPassword(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" required />
+              <input type="password" placeholder="确认新密码" value={rPassword2} onChange={e => setRPassword2(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" required />
               {rMsg && <p className={`text-sm p-2 rounded ${rMsg.startsWith('✅') ? 'text-green-700 bg-green-50' : 'text-red-600 bg-red-50'}`}>{rMsg}</p>}
               <div className="flex gap-2 pt-1">
                 <button type="submit" disabled={rLoading} className="flex-1 py-2 px-4 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm disabled:opacity-50">
