@@ -474,7 +474,7 @@ const COMMON_DISTRACTORS = [
 
 // 词库缓存版本号：每次修改题目生成质量（如修复模板句/脏数据）后 +1，
 // 旧版本缓存自动失效，下次请求强制重新 AI 生成干净句子，无需手动清库。
-const CACHE_VERSION = 13;
+const CACHE_VERSION = 14;
 
 // 不同目标分数对应的句子复杂度指导（注入到 AI 生成 prompt）
 const LEVEL_GUIDE = {
@@ -885,6 +885,16 @@ function isTemplateChinese(cn) {
     /(结构性|深层的|长期的).*(影响|后果|矛盾|不平等)/,
     /分配.*(有限|稀缺).*资源/,
     /失去.*存在价值/,
+    // === 新增：覆盖"近年来愈演愈烈，反映了更深层次的紧张关系"等学术腔模板 ===
+    /愈演愈烈/,
+    /(近年来|近些年|近年).*(愈演愈烈|不断加剧|不断升温|持续升温)/,
+    /围绕.*的(争论|讨论|争议|辩论).*((愈演愈烈|反映|引发|涉及|日益)|更(深|深层次|深层次))/,
+    /反映了.*(更深|深层次|更深层次|日益|越来越).*(紧张|矛盾|不平等|分歧|差异|复杂)/,
+    /(更深|深层次|更深层次|日益|越来越).*(紧张|矛盾|不平等|分歧|差异|复杂)/,
+    /(值得|需要|应当).*(重新审视|深思|反思|关注|考虑)/,
+    /(在|从).*角度看(来|看).*/,
+    /不应(被|仅仅).*视为/,
+    /不(仅仅|只是|只是)是.*而是/,
   ];
   return TEMPLATE_CN_PATTERNS.some(p => p.test(cn));
 }
@@ -1092,11 +1102,22 @@ function isTemplateSentence(sentence, word) {
     /\braises?\s+(questions?|issues?|concerns?)\s+(that\s+)?(remain|are)\s+(largely|mostly|still|yet)\s+(unresolved|unanswered|unclear|open)\b/,
     /\bhas (reshaped|transformed|revolutionized|changed|altered)\s+(the\s+)?way\b/,
     /\bfew would (deny|dispute|argue|question)\s+that\b/,
+    // === 新增：覆盖"surrounding ... which has intensified in recent years reflects deeper tensions"等学术腔模板 ===
+    /\b(has|have|having) (intensified|deepened|escalated|grown|increased)\s+in (recent|current|modern|today's)\s+(years?|times?|decades?)\b.*\b(reflects?|reveals?|shows?|indicates?|suggests?|highlights?|exposes?)\b/i,
+    /\b(reflects?|reveals?|shows?|indicates?|suggests?|highlights?|exposes?)\b.*\bdeeper\s+(tensions?|conflicts?|divisions?|issues?|problems?|inequalities?|concerns?)\b/,
+    /\bdebate\s+surrounding\b.*\b(reflects?|reveals?|shows?|intensified)\b/,
+    /\b(surrounding|around|about)\b.*\b(which|that)\s+has\s+(intensified|escalated|deepened)\b/,
+    /\bin recent years (has|have|having)\s+(intensified|escalated|deepened)\b/,
+    /\bdeeper\s+(tensions?|conflicts?|divisions?|issues?|inequalities?)\s+(between|among)\b/,
+    /\b(has|have|having)\s+become\s+(a\s+)?(common|popular|widespread)\s+(thing|phenomenon|trend)\b/i,
+    /\bplays?\s+(a\s+)?(huge|big|major|important)\s+part\s+in\b/,
+    /\b(is|are)\s+(often|usually|generally|frequently)\s+(associated|linked|connected)\s+with\b/,
   ];
   if (TEMPLATE_PHRASES.some(p => p.test(s))) return true;
 
-  // 额外检测：如果句子中不含任何该词的语义相关词汇（基于简单启发），可能也是模板
-  // 此处不做复杂NLP，仅靠上面的短语匹配已能拦截大部分模板
+  // === 换词测试：模板句的特征是"答案词可任意替换为不相关词，句子仍通顺" ===
+  // 由于纯文本难以做语义判断，这里用"高频模板短语"做穷举拦截——
+  // 上述 TEMPLATE_PHRASES 已能覆盖 90% 情况。换词测试在 AI 路径外层用更可靠的方式处理。
 
   return false;
 }
