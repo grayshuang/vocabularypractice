@@ -411,7 +411,7 @@ const COMMON_DISTRACTORS = [
 
 // 词库缓存版本号：每次修改题目生成质量（如修复模板句/脏数据）后 +1，
 // 旧版本缓存自动失效，下次请求强制重新 AI 生成干净句子，无需手动清库。
-const CACHE_VERSION = 7;
+const CACHE_VERSION = 8;
 
 // 不同目标分数对应的句子复杂度指导（注入到 AI 生成 prompt）
 const LEVEL_GUIDE = {
@@ -677,13 +677,13 @@ async function translateSentence(sentence) {
 }
 
 /** 根据词性生成兜底释义（当词典查不到干扰词定义时使用）。 */
-function fallbackDefForPos(pos, word) {
-  const w = word || 'this word';
+function fallbackDefForPos(pos) {
+  // 注意：绝不把原词嵌入返回值，否则前端 strip 后会变成裸词泄露答案
   switch ((pos || 'n').toLowerCase()) {
-    case 'v': case 'vi': case 'vt': return `to ${w} (verb)`;
-    case 'adj': return `${w} (adjective)`;
-    case 'adv': return `${w} (adverb)`;
-    case 'n': default: return `${w} (noun)`;
+    case 'v': case 'vi': case 'vt': return 'to perform or carry out an action (verb)';
+    case 'adj': return 'describing a quality or characteristic (adjective)';
+    case 'adv': return 'modifying how an action is performed (adverb)';
+    case 'n': default: return 'referring to a person, place, thing, or idea (noun)';
   }
 }
 
@@ -765,7 +765,7 @@ async function generateFallback(words, level, batchIndex, pool) {
       const d = (infoMap[oKey] || {}).definition || '';
       if (d && !d.toLowerCase().includes(word.toLowerCase())) return stripLite(d);
       // 兜底：基于该词的猜测词性生成占位释义
-      return fallbackDefForPos(posMap[oKey] || 'n', o);
+      return fallbackDefForPos(posMap[oKey] || 'n');
     });
 
     // 中文优先级：整句并行翻译 > 词级词典翻译 > 模板中文 > 占位符
@@ -781,6 +781,15 @@ async function generateFallback(words, level, batchIndex, pool) {
     const thinkTag = THINKING_TAGS[i % THINKING_TAGS.length];
     const pattern = SENTENCE_PATTERNS[i % SENTENCE_PATTERNS.length];
 
+    // 最终安全扫描：option_defs 绝不能等于（或包含）任何选项词
+    const safeOptionDefs = optionDefs.map((d, di) => {
+      const dClean = stripLite(d || '').toLowerCase();
+      if (!d || options.some(o => dClean === o.toLowerCase() || dClean.includes(o.toLowerCase()))) {
+        return fallbackDefForPos(pos);  // 兜底替换，绝不泄露选项原词
+      }
+      return d;
+    });
+
     out.push({
       word,
       pos,
@@ -790,8 +799,8 @@ async function generateFallback(words, level, batchIndex, pool) {
       topic_category: topicCat,
       thinking_tag: thinkTag,
       template: pattern,
-      definition: (info.definition && !info.definition.toLowerCase().includes(word.toLowerCase())) ? stripLite(info.definition) : fallbackDefForPos(pos, word),
-      option_defs: optionDefs,
+      definition: (info.definition && !info.definition.toLowerCase().includes(word.toLowerCase())) ? stripLite(info.definition) : fallbackDefForPos(pos),
+      option_defs: safeOptionDefs,
       chinese
     });
   }
@@ -805,7 +814,7 @@ async function generateFallback(words, level, batchIndex, pool) {
       options: shuffleArray([w, 'significant', 'essential', 'crucial'].filter(o => o !== w).slice(0, 3).concat(w)),
       correct_answer: w,
       topic_category: '社会类', thinking_tag: '效率', template: 'It is widely argued that...',
-      definition: `${w} (${posGuess(w)})`,
+      definition: fallbackDefForPos(posGuess(w)),
       option_defs: ['（释义暂缺）', '（释义暂缺）', '（释义暂缺）', '（释义暂缺）'],
       chinese: `（关于 ${w} 的句子翻译待补充）`
     }));
@@ -1230,12 +1239,12 @@ const IELTS_COLLOCATIONS = [
 ];
 
 // ⑨ 搭配拼词题目构建
-function buildCollocationQuestions(vocabularyList) {
+function buildCollocationQuestions(vocabularyList, maxCount = 20) {
   const lowerSet = new Set((vocabularyList || []).map(w => String(w).toLowerCase()));
   // 优先用老师 wordlist 中能匹配到搭配的词，否则用内置全部
   let pool = IELTS_COLLOCATIONS.filter(c => lowerSet.has(c.base.toLowerCase()));
   if (pool.length === 0) pool = IELTS_COLLOCATIONS.slice();
-  pool = shuffleArray(pool).slice(0, 20);
+  pool = shuffleArray(pool).slice(0, maxCount);
   return pool.map(c => {
     const others = shuffleArray(IELTS_COLLOCATIONS.filter(x => x.partner !== c.partner)).slice(0, 3).map(x => x.partner);
     const options = shuffleArray([c.partner, ...others]);
@@ -1370,8 +1379,8 @@ const CONFUSABLE_PAIRS = [
 ];
 
 // ⑧ 形近辨析题目构建（不依赖 wordlist，直接走内置库）
-function buildLookalikeQuestions() {
-  const pool = shuffleArray(CONFUSABLE_PAIRS.slice()).slice(0, 16);
+function buildLookalikeQuestions(maxCount = 16) {
+  const pool = shuffleArray(CONFUSABLE_PAIRS.slice()).slice(0, maxCount);
   return pool.map(p => ({
     word: p.target,
     confusers: p.confusers,
@@ -1391,13 +1400,20 @@ app.get('/api/practice/questions', authMiddleware, async (req, res) => {
 
   try {
     let questions = [];
+    // 确定该模式的期望题目数（与其它模式一致：=分配给该模式的词数，兜底用总词库大小）
+    const vocabCount = (room.vocabulary_list || []).length;
+    const modeWordCount = (room.mode_word_map && Array.isArray(room.mode_word_map[mode_type]) && room.mode_word_map[mode_type].length > 0)
+      ? room.mode_word_map[mode_type].length
+      : vocabCount;
+    const maxCount = Math.max(2, Math.min(modeWordCount, vocabCount));  // 至少2题，上限不超总词数
+
     if (mode_type === 'lookalike') {
-      // ⑧ 形近辨析：内置库，不读 wordlist
-      questions = buildLookalikeQuestions();
+      // ⑧ 形近辨析：内置库，按期望数量裁剪
+      questions = buildLookalikeQuestions(maxCount);
     } else if (mode_type === 'collocation') {
-      // ⑨ 搭配拼词：优先 wordlist ∩ 内置库，否则内置库
+      // ⑨ 搭配拼词：优先 wordlist ∩ 内置库，否则内置库；按期望数量裁剪
       const vocabularyList = room.vocabulary_list || [];
-      questions = buildCollocationQuestions(vocabularyList);
+      questions = buildCollocationQuestions(vocabularyList, maxCount);
     } else {
       // 其余模式：按练习模式筛选词汇（优先该模式分配的词）
       let vocabularyList = room.vocabulary_list || [];

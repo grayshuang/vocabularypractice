@@ -606,11 +606,14 @@ function MatchMode({ q, initialResult, onCommit, onSolved }) {
   const opts = q.options || [];
   const correctIdx = opts.findIndex(o => o === (q.correct_answer || q.word));
   const w = (q.word || q.correct_answer || '').toLowerCase();
-  // 右列释义：优先用真实 option_defs；若缺失/等于原词，则正确项回退到中文，干扰项留空（绝不把原词当释义展示）
+  // 收集所有选项词（用于检测释义是否泄露了某个选项）
+  const optSet = new Set(opts.map(o => String(o).toLowerCase()));
+  // 右列释义：优先用真实 option_defs；若缺失/等于任意选项词/等于答案词，则正确项回退到中文，干扰项统一占位
   const defs = opts.map((o, i) => {
     let t = stripChinese((q.option_defs && q.option_defs[i]) || '');
-    if (!t || t.toLowerCase() === o.toLowerCase() || t.toLowerCase() === w) {
-      t = (i === correctIdx && q.chinese) ? cnText(q.chinese) : '';
+    const tLower = t.toLowerCase();
+    if (!t || tLower === w || optSet.has(tLower)) {
+      t = (i === correctIdx && q.chinese) ? cnText(q.chinese) : '（待匹配）';
     }
     return t;
   });
@@ -1823,10 +1826,17 @@ export default function Practice() {
   const defChoices = useMemo(() => {
     if (!currentQuestion) return [];
     const w = (currentQuestion.word || currentQuestion.correct_answer || '').toLowerCase();
-    const hasDefs = Array.isArray(currentQuestion.option_defs) && currentQuestion.option_defs.some(d => d && String(d).trim() && String(d).toLowerCase() !== w);
+    // 收集所有选项词的小写集合（用于检测"释义是否泄露了某个选项原文"）
+    const optSet = new Set((currentQuestion.options || []).map(o => String(o).toLowerCase()).filter(Boolean));
+    const hasDefs = Array.isArray(currentQuestion.option_defs) && currentQuestion.option_defs.some(d => {
+      const ds = String(d || '').trim().toLowerCase();
+      return ds && ds !== w && !optSet.has(ds);  // 有至少一个有效释义（非答案词、非任意选项词）
+    });
     return (currentQuestion.options || []).map((opt, i) => {
       let d = hasDefs ? stripChinese(currentQuestion.option_defs[i] || '') : '';
-      if (d.toLowerCase() === w) d = ''; // 释义若等于原词则清空，避免泄露
+      // 释义若等于答案词 或等于任何一个选项词（包括自身），都清空避免泄露
+      const dLower = d.toLowerCase();
+      if (!d || dLower === w || optSet.has(dLower)) d = '';
       return { word: stripChinese(opt), def: d || '（暂无释义）' };
     });
   }, [currentQuestion]);
@@ -2197,8 +2207,9 @@ export default function Practice() {
               {/* —— 同义替换 —— */}
               {activeMode === 'synonym' && (
                 <>
-                  <p className="text-[11px] text-indigo-500 mb-1">同义替换 · 根据中文提示选出正确的英文释义</p>
-                  <p className="text-lg font-bold text-gray-800 mb-4 leading-snug">{cnText(q.chinese) || stripChinese(q.word)}</p>
+                  <p className="text-[11px] text-indigo-500 mb-1">同义替换 · 选出正确的英文释义</p>
+                  <p className="text-2xl font-bold text-indigo-700 mb-1">{stripChinese(q.word || q.correct_answer || '')}</p>
+                  {q.chinese && <p className="text-xs text-gray-400 mb-3">{cnText(q.chinese)}</p>}
                   <div className="grid grid-cols-1 gap-2">
                     {defChoices.map((c, i) => {
                       let cls = 'border rounded-lg text-left transition text-sm px-3 py-2.5 ';
@@ -2321,7 +2332,7 @@ export default function Practice() {
                       })()}
                       {buildHintLevel >= 2 && (
                         <p className="text-xs text-blue-700 font-mono bg-white rounded px-2 py-1 mt-1">
-                          答案共 {fullSentence(q).split(/\s+/).length} 词，首字母：{fullSentence(q).split(/\s+/).map(w => w[0]?.toUpperCase() || '').join(' ')}
+                          前半答案：{fullSentence(q).split(/\s+/).slice(0, Math.ceil(fullSentence(q).split(/\s+/).length * 0.6)).join(' ')}...
                         </p>
                       )}
                       {buildHintLevel >= 3 && (
@@ -2434,7 +2445,8 @@ export default function Practice() {
                       })()}
                       {chunkHintLevel >= 2 && (
                         <p className="text-xs text-blue-700 font-mono bg-white rounded px-2 py-1 mt-1">
-                          每空格词数：{chunkCorrect.filter((_, i) => chunkBlankIndices.includes(i)).map(c => c.split(/\s+/).length).join(' / ')} 词
+                          提示：前 {Math.ceil(chunkBlankIndices.length * 0.6)} 个空格的答案 →{' '}
+                          {chunkBlankIndices.slice(0, Math.ceil(chunkBlankIndices.length * 0.6)).map(i => chunkCorrect[i]).join(' / ')}
                         </p>
                       )}
                       {chunkHintLevel >= 3 && (
