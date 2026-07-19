@@ -400,7 +400,7 @@ const FALLBACK_TEMPLATES = {
 const BATCH_SIZE = 10;
 // 词库缓存版本号：每次修改题目生成质量（如修复模板句/脏数据）后 +1，
 // 旧版本缓存自动失效，下次请求强制重新 AI 生成干净句子，无需手动清库。
-const CACHE_VERSION = 5;
+const CACHE_VERSION = 6;
 
 // 不同目标分数对应的句子复杂度指导（注入到 AI 生成 prompt）
 const LEVEL_GUIDE = {
@@ -631,17 +631,55 @@ function posGuess(word) {
 }
 
 /**
+ * 翻译整句英文为中文（MyMemory 免费 API，5s 超时）。
+ * 用于 generateFallback 的 chinese 字段：给学生展示完整句子的中文含义，而非仅目标单词的词典翻译。
+ */
+async function translateSentence(sentence) {
+  if (!sentence || typeof sentence !== 'string') return '';
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(sentence)}&langpair=en|zh-CN`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (res.ok) {
+      const data = await res.json();
+      const t = data.responseData && data.responseData.translatedText;
+      if (t && t !== sentence) return t.split(/[；;、]/)[0].trim() || '';
+    }
+  } catch (_) { /* 翻译源不可达 */ }
+  return '';
+}
+
+/** 根据词性生成兜底释义（当词典查不到干扰词定义时使用）。 */
+function fallbackDefForPos(pos, word) {
+  const w = word || 'this word';
+  switch ((pos || 'n').toLowerCase()) {
+    case 'v': case 'vi': case 'vt': return `to ${w} (verb)`;
+    case 'adj': return `${w} (adjective)`;
+    case 'adv': return `${w} (adverb)`;
+    case 'n': default: return `${w} (noun)`;
+  }
+}
+
+/**
  * 高质量降级方案（AI 不可用时的兜底）：用免费词典 API 实时取每个词（含干扰词）的
- * 真实英文释义 / 中文翻译 / 例句，生成可用题目。绝不套万能模板、绝不把原词写进释义。
- * 词典不可达时退化为模板句 + 模板中文（至少中文提示仍在）。
+ * 真实英文释义 / 中文翻译 / 例句，生成可用题目。保证：
+ * - options ≥ 4 个不重复选项
+ * - chinese 是整句的中文翻译（非单个词翻译）
+ * - option_defs 尽量用真实词典释义，缺失则用词性兜底
  */
 async function generateFallback(words, level, batchIndex, pool) {
   const cleaned = words.map(cleanWordEntry).filter(Boolean);
   const distractorPool = (pool && pool.length ? pool : words).map(cleanWordEntry).filter(Boolean);
-  // 并行查所有目标词（干扰词在循环内补齐）
-  const looked = await Promise.all(cleaned.map(w => lookupWord(w)));
+  // 并行查所有目标词 + 干扰词池（确保干扰词也有释义可用）
+  const allLookupWords = [...new Set([...cleaned, ...distractorPool])];
+  const looked = await Promise.all(allLookupWords.map(w => lookupWord(w)));
   const infoMap = {};
-  cleaned.forEach((w, i) => { infoMap[w.toLowerCase()] = looked[i]; });
+  allLookupWords.forEach((w, i) => { infoMap[w.toLowerCase()] = looked[i]; });
+
+  // 预查所有词的词性（用于兜底释义）
+  const posMap = {};
+  allLookupWords.forEach(w => { posMap[w.toLowerCase()] = (infoMap[w.toLowerCase()] || {}).pos || posGuess(w); });
 
   const out = [];
   for (let i = 0; i < cleaned.length; i++) {
@@ -649,13 +687,23 @@ async function generateFallback(words, level, batchIndex, pool) {
     const info = infoMap[word.toLowerCase()] || { pos: '', definition: '', example: '', chinese: '' };
     const pos = info.pos || posGuess(word);
 
-    // 取 3 个同批干扰词
-    const others = distractorPool.filter(w => w && w !== word).sort(() => Math.random() - 0.5).slice(0, 3);
-    const options = shuffleArray([word, ...others]);
-    // 每个选项配真实释义（含答案词则清空，避免泄露）
+    // 取 3 个同批干扰词（确保不重复、不是答案词本身）
+    const othersRaw = distractorPool.filter(w => w && w.toLowerCase() !== word.toLowerCase());
+    const others = shuffleArray(othersRaw).slice(0, 3);
+    // 如果干扰词不够3个，用 COMMON_DISTRACTORS 补齐
+    const needMore = Math.max(0, 3 - others.length);
+    const extras = needMore > 0 ? COMMON_DISTRACTORS.filter(d => d.toLowerCase() !== word.toLowerCase() && !others.some(o => o.toLowerCase() === d.toLowerCase())).slice(0, needMore) : [];
+    const options = shuffleArray([word, ...others, ...extras]);
+    // 极端保护：如果还是不足4，复制填充
+    while (options.length < 4) options.push(`word_${options.length + 1}`);
+
+    // 每个选项配释义：优先词典真实释义 → 词性兜底（绝不允许空串导致校验失败）
     const optionDefs = options.map(o => {
-      const d = (infoMap[o.toLowerCase()] || {}).definition || '';
-      return (d && !d.toLowerCase().includes(word.toLowerCase())) ? stripLite(d) : '';
+      const oKey = o.toLowerCase();
+      const d = (infoMap[oKey] || {}).definition || '';
+      if (d && !d.toLowerCase().includes(word.toLowerCase())) return stripLite(d);
+      // 兜底：基于该词的猜测词性生成占位释义
+      return fallbackDefForPos(posMap[oKey] || 'n', o);
     });
 
     // 句子：优先用词典真实例句（含目标词→挖空），否则模板句
@@ -676,10 +724,19 @@ async function generateFallback(words, level, batchIndex, pool) {
       if (!/[.!?]$/.test(sentence)) sentence += '.';
     }
 
+    // 中文：整句翻译（优先）→ 词级词典翻译（次选）→ 模板中文 → 占位符
+    const rawSentenceForTranslate = sentence.replace(/_{4,}/g, word); // 翻译时还原答案词
+    let chinese = await translateSentence(rawSentenceForTranslate);
+    if (!chinese) chinese = info.chinese || '';
+    if (!chinese) {
+      const tmplC = FALLBACK_TEMPLATES[pos] ? FALLBACK_TEMPLATES[pos][(i + batchIndex * BATCH_SIZE) % FALLBACK_TEMPLATES[pos].length].c : '';
+      chinese = tmplC ? tmplC.replace('{w}', word) : '';
+    }
+    if (!chinese) chinese = '（翻译待补充）';
+
     const topicCat = TOPIC_CATEGORIES[(i + batchIndex) % TOPIC_CATEGORIES.length];
     const thinkTag = THINKING_TAGS[i % THINKING_TAGS.length];
     const pattern = SENTENCE_PATTERNS[i % SENTENCE_PATTERNS.length];
-    const tmplC = FALLBACK_TEMPLATES[pos] ? FALLBACK_TEMPLATES[pos][(i + batchIndex * BATCH_SIZE) % FALLBACK_TEMPLATES[pos].length].c : '';
 
     out.push({
       word,
@@ -690,10 +747,9 @@ async function generateFallback(words, level, batchIndex, pool) {
       topic_category: topicCat,
       thinking_tag: thinkTag,
       template: pattern,
-      definition: (info.definition && !info.definition.toLowerCase().includes(word.toLowerCase())) ? stripLite(info.definition) : '',
+      definition: (info.definition && !info.definition.toLowerCase().includes(word.toLowerCase())) ? stripLite(info.definition) : fallbackDefForPos(pos, word),
       option_defs: optionDefs,
-      // 中文优先用真实翻译；缺失时用模板中文；模板也没有则留空（绝不回退为原词，否则前端提示会泄露答案）
-      chinese: info.chinese || (tmplC ? tmplC.replace('{w}', word) : '（翻译待补充）')
+      chinese
     });
   }
   return out;
