@@ -1781,14 +1781,18 @@ export default function Practice() {
 
   /* ── 完成 ── */
   const finishPractice = useCallback(async () => {
-    // 补录未作答的题目（确保教师端能看到全部词汇）
+    // 补录未作答的题目（确保教师端能看到全部词汇）——批量并行提交，不再串行逐个await
     const allQuestions = Object.values(questionsByMode).flat();
     const answeredUids = new Set(results.map(r => r.uid));
     const sid = sessionId || await ensureSession();
-    for (const q of allQuestions) {
-      if (!answeredUids.has(q.uid)) {
-        try {
-          await api.submitAnswer({
+    const unanswered = allQuestions.filter(q => !answeredUids.has(q.uid));
+    if (unanswered.length > 0) {
+      // 分批并行（每批10个），避免同时发过多请求
+      const BATCH = 10;
+      for (let i = 0; i < unanswered.length; i += BATCH) {
+        const batch = unanswered.slice(i, i + BATCH);
+        await Promise.allSettled(batch.map(q =>
+          api.submitAnswer({
             session_id: sid,
             question: q.sentence || q.word,
             student_answer: '(未作答)',
@@ -1797,8 +1801,8 @@ export default function Practice() {
             is_correct: false,
             mode: q.mode || 'unknown',
             uid: q.uid,
-          });
-        } catch { /* 静默失败，不影响主流程 */ }
+          }).catch(() => {})
+        ));
       }
     }
 
@@ -2696,9 +2700,9 @@ export default function Practice() {
 
           {/* 提交并退出按钮 */}
           <div className="flex justify-center pb-1.5">
-            <button onClick={() => {
+            <button onClick={async () => {
               if (!window.confirm('确定要提交并退出吗？\n已完成的题目将保留记录。')) return;
-              finishPractice();
+              try { await finishPractice(); } catch(e) { console.error('提交失败', e); }
               navigate('/');
             }}
               className="text-xs bg-orange-500 text-white border-0 rounded-lg px-4 py-2 hover:bg-orange-600 font-medium shadow-sm transition">
