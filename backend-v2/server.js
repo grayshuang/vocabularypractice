@@ -1047,7 +1047,8 @@ async function generateFallback(words, level, batchIndex, pool) {
       template: pattern,
       definition: (info.definition && !info.definition.toLowerCase().includes(word.toLowerCase()) && !isGenericDefinition(info.definition)) ? stripLite(info.definition) : fallbackDefForPos(pos, i + 77),
       option_defs: safeOptionDefs,
-      chinese
+      chinese,
+      sentence_cn: translations[i] || ''   // 整句中文翻译（独立于词级chinese）
     });
   }
   return out;
@@ -1062,7 +1063,8 @@ async function generateFallback(words, level, batchIndex, pool) {
       topic_category: '社会类', thinking_tag: '效率', template: 'It is widely argued that...',
       definition: fallbackDefForPos(posGuess(w), wi),
       option_defs: [0,1,2,3].map(vi => fallbackDefForPos(posGuess(w), wi + vi + 10)),
-      chinese: `（关于 ${w} 的句子翻译待补充）`
+      chinese: `（关于 ${w} 的句子翻译待补充）`,
+      sentence_cn: ''
     }));
   }
 }
@@ -1207,6 +1209,7 @@ async function getQuestionsCached(vocabularyList, level) {
           topic: q.topic || '',
           template: q.template || '',
           chinese: q.chinese || '',
+          sentence_cn: q.sentence_cn || '',
           definition: q.definition || '',
           option_defs: q.option_defs || [],
           topic_category: q.topic_category || ''
@@ -1264,6 +1267,7 @@ async function getQuestionsCached(vocabularyList, level) {
       option_defs: Array.isArray(q.option_defs) ? q.option_defs.map(finalStrip) : q.option_defs,
       // chinese 是中文翻译字段，绝不能套用 finalStrip（会删掉所有中文字符）。仅做空白归一。
       chinese: (typeof q.chinese === 'string' && q.chinese.trim()) ? q.chinese.replace(/\s+/g, ' ').trim() : '',
+      sentence_cn: (typeof q.sentence_cn === 'string' && q.sentence_cn.trim()) ? q.sentence_cn.replace(/\s+/g, ' ').trim() : '',
       topic_category: q.topic_category || '',
     };
     // 定义若包含答案词本身则清空
@@ -1532,6 +1536,7 @@ function buildCollocationQuestions(vocabularyList, maxCount = 20) {
       pos: c.pos,
       sentence: c.sentence,
       chinese: c.zh,
+      sentence_cn: '',
       options,
       correct_answer: c.partner,
       option_defs: options.map(() => ''),

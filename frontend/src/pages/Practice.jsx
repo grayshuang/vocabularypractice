@@ -1240,6 +1240,7 @@ export default function Practice() {
   const navigate = useNavigate();
 
   const [modes, setModes] = useState([]);           // 老师选定的模式列表
+  const [vocabularyList, setVocabularyList] = useState([]); // 教师发布的词汇表（用于过滤未作答）
   const [questionsByMode, setQuestionsByMode] = useState({}); // { [mode]: [...] }
   const [activeMode, setActiveMode] = useState(null);         // 当前选中的模式
   const [sessionId, setSessionId] = useState(null);
@@ -1394,6 +1395,7 @@ export default function Practice() {
       setLoading(true);
       const roomRes = await api.getRoom(roomCode);
       const r = roomRes.data || roomRes;
+      setVocabularyList(r.vocabulary_list || []);
       let m = (r.practice_modes || []).filter(x => MODES.some(y => y.id === x));
       if (m.length === 0) m = ['sentence_fill'];
       setModes(m);
@@ -1781,11 +1783,18 @@ export default function Practice() {
 
   /* ── 完成 ── */
   const finishPractice = useCallback(async () => {
-    // 补录未作答的题目（确保教师端能看到全部词汇）——批量并行提交，不再串行逐个await
+    // 补录未作答的题目——只对教师发布的词汇提交，不把干扰词/选项词纳入
     const allQuestions = Object.values(questionsByMode).flat();
     const answeredUids = new Set(results.map(r => r.uid));
     const sid = sessionId || await ensureSession();
-    const unanswered = allQuestions.filter(q => !answeredUids.has(q.uid));
+    // 构建教师发布词汇集合（大小写无关匹配）
+    const vocabSet = new Set((vocabularyList || []).map(w => w.toLowerCase()));
+    const unanswered = allQuestions.filter(q => {
+      if (answeredUids.has(q.uid)) return false;
+      // 只对发布词汇提交未作答；干扰词/选项词跳过
+      const w = (q.word || q.correct_answer || '').toLowerCase();
+      return w && vocabSet.has(w);
+    });
     if (unanswered.length > 0) {
       // 分批并行（每批10个），避免同时发过多请求
       const BATCH = 10;
@@ -1819,7 +1828,7 @@ export default function Practice() {
       console.error('结束练习失败', err);
     }
     setShowResult(true);
-  }, [results, questionsByMode, sessionId, ensureSession]);
+  }, [results, questionsByMode, sessionId, ensureSession, vocabularyList]);
 
   const restartPractice = async (onlyWrong) => {
     setShowResult(false);
@@ -1945,9 +1954,12 @@ export default function Practice() {
               </p>
             )}
 
-            {/* 中文翻译 */}
-            {q?.chinese && (
-              <p className="text-sm text-orange-800 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 italic font-medium">💬 {typeof q.chinese === 'object' ? JSON.stringify(q.chinese) : cnText(String(q.chinese))}</p>
+            {/* 中文翻译：整句优先 + 词级补充 */}
+            {q?.sentence_cn && (
+              <p className="text-sm text-orange-800 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 italic font-medium leading-relaxed">💬 {cnText(String(q.sentence_cn))}</p>
+            )}
+            {q?.chinese && (!q?.sentence_cn || !cnText(q.sentence_cn).includes(cnText(q.chinese))) && (
+              <p className="text-xs text-orange-600 bg-orange-25 border border-orange-200 rounded-lg px-3 py-1 font-medium leading-relaxed">📝 {typeof q.chinese === 'object' ? JSON.stringify(q.chinese) : cnText(String(q.chinese))}</p>
             )}
 
             {/* 学生答案 */}
@@ -2192,7 +2204,8 @@ export default function Practice() {
               {/* —— 句子填空 —— */}
               {activeMode === 'sentence_fill' && (
                 <>
-                  {q.chinese && <p className="text-sm text-orange-800 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 mb-2 leading-relaxed font-medium">{cnText(q.chinese)}</p>}
+                  {q.sentence_cn && <p className="text-sm text-orange-800 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 mb-1 leading-relaxed font-medium">💬 {cnText(q.sentence_cn)}</p>}
+                  {q.chinese && !q.sentence_cn?.includes(cnText(q.chinese)) && <p className="text-xs text-orange-600 bg-orange-25 border border-orange-200 rounded-lg px-3 py-1 mb-2 leading-relaxed">📝 {cnText(q.chinese)}</p>}
                   <p className="text-base leading-relaxed mb-4 text-gray-800">
                     {safeSentence(q).split(/_{4,}/).map((part, idx, arr) => (
                       <span key={idx}>{part}{idx < arr.length - 1 && <span className="inline-block min-w-[80px] mx-0.5 border-b-2 border-indigo-300"></span>}</span>
@@ -2251,7 +2264,8 @@ export default function Practice() {
                     }
                     return <p className="text-2xl font-bold text-indigo-700 mb-1">{displayWord || '—'}</p>;
                   })()}
-                  {q.chinese && <p className="text-sm text-orange-800 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 mb-3 leading-relaxed font-medium">{cnText(q.chinese)}</p>}
+                  {q.sentence_cn && <p className="text-sm text-orange-800 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 mb-1 leading-relaxed font-medium">💬 {cnText(q.sentence_cn)}</p>}
+                  {q.chinese && !q.sentence_cn?.includes(cnText(q.chinese)) && <p className="text-xs text-orange-600 bg-orange-25 border border-orange-200 rounded-lg px-3 py-1 mb-2 leading-relaxed">📝 {cnText(q.chinese)}</p>}
                   <div className="grid grid-cols-1 gap-2">
                     {defChoices.map((c, i) => {
                       let cls = 'border rounded-lg text-left transition text-sm px-3 py-2.5 ';
