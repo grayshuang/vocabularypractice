@@ -473,7 +473,7 @@ const COMMON_DISTRACTORS = [
 
 // 词库缓存版本号：每次修改题目生成质量（如修复模板句/脏数据）后 +1，
 // 旧版本缓存自动失效，下次请求强制重新 AI 生成干净句子，无需手动清库。
-const CACHE_VERSION = 10;
+const CACHE_VERSION = 11;
 
 // 不同目标分数对应的句子复杂度指导（注入到 AI 生成 prompt）
 const LEVEL_GUIDE = {
@@ -552,6 +552,16 @@ ${JSON.stringify(wordBatch)}
 - 每个词的句子必须**根据词义量身定制**，内容要体现该词具体是什么意思、在什么语境下用。宁可句子结构相似，也绝不能用"X is important"这种放之四海皆准的废话。
 - 自检：把生成的句子里的词换成另一个词，如果句子依然通顺且"没毛病"，说明你在套模板——重写！
 - 一共生成 ${wordBatch.length} 道
+
+🚨 最后一次强调：绝对禁止以下模板句式（后端会自动检测并拦截，被拦截的题会降级为低质量兜底句子）：
+  - "While ____ is frequently cited as..."（无论填什么词都成立）
+  - "____ plays a crucial role in..."
+  - "The importance of ____ cannot be overstated"
+  - "____ has become increasingly common in modern society"
+  - "Few would deny that ____ has reshaped..."
+  - "____ raises questions that remain largely unresolved"
+  - 任何"把词塞进固定句型"的写法
+  每个句子的**核心语义必须依赖目标词的具体含义**！
 - 只返回JSON数组`;
 
   try {
@@ -560,10 +570,10 @@ ${JSON.stringify(wordBatch)}
     const response = await axios.post(DASHSCOPE_API_URL, {
       model: 'qwen-plus',
       messages: [
-        { role: 'system', content: '你是雅思口语专家。只返回JSON数组，不要解释，不要markdown代码块。每个词汇必须有独特、贴合词义的句子。' },
+        { role: 'system', content: '你是雅思口语8分专家。只返回JSON数组，不要解释，不要markdown代码块。每个词汇必须有独特、贴合词义的句子。绝对禁止生成模板句——每个句子必须围绕该词的具体含义展开。' },
         { role: 'user', content: prompt }
       ],
-      temperature: 0.7,
+      temperature: 0.4,
     }, {
       headers: {
         'Content-Type': 'application/json',
@@ -741,17 +751,60 @@ async function translateSentence(sentence) {
 /** 根据词性生成兜底释义（当词典查不到干扰词定义时使用）。variant 用于同词性产生不同措辞避免重复。 */
 function fallbackDefForPos(pos, variant) {
   // 注意：绝不把原词嵌入返回值，否则前端 strip 后会变成裸词泄露答案
-  const v = (variant || 0) % 4;  // 每种词性 4 种变体
+  // 改进：每种词性的变体指向不同语义域，确保彼此可区分
+  const v = (variant || 0) % 6;  // 每种词性 6 种变体（增加区分度）
   switch ((pos || 'n').toLowerCase()) {
     case 'v': case 'vi': case 'vt':
-      return ['to perform or carry out an action (verb)', 'an action or activity (verb)', 'expressing an act or deed (verb)', 'indicating something is done (verb)'][v];
+      return [
+        'relating to an action or process that changes something',
+        'connected to how people behave or interact in society',
+        'about creating, building, or producing something new',
+        'involving movement, change, or development over time',
+        'describing how something affects or influences a situation',
+        'used when talking about managing or controlling something'
+      ][v];
     case 'adj':
-      return ['describing a quality or characteristic (adjective)', 'giving more information about a noun (adjective)', 'modifying or describing a thing (adjective)', 'expressing an attribute or property (adjective)'][v];
+      return [
+        'describing a quality or condition of something',
+        'relating to size, amount, or degree of something',
+        'about how important or necessary something is',
+        'connected to appearance, form, or structure',
+        'describing a feeling, attitude, or opinion',
+        'indicating whether something is good or bad'
+      ][v];
     case 'adv':
-      return ['modifying how an action is performed (adverb)', 'telling how or when something happens (adverb)', 'qualifying an adjective or verb (adverb)', 'adding detail to the manner of action (adverb)'][v];
+      return [
+        'telling how often or how much something happens',
+        'about the manner or way in which something is done',
+        'relating to time — when something occurs',
+        'describing the level or extent of something',
+        'connected to certainty or possibility',
+        'indicating a point of view or perspective'
+      ][v];
     case 'n': default:
-      return ['referring to a person, place, thing, or idea (noun)', 'naming an object, concept, or entity (noun)', 'representing something that exists or can be discussed (noun)', 'a word used to identify any item or being (noun)'][v];
+      return [
+        'a concept or idea in academic or scientific contexts',
+        'something physical found in nature or daily life',
+        'an abstract principle or rule in social systems',
+        'a measurable quantity in economics or statistics',
+        'part of a system, process, or method',
+        'a role, position, or category in an organization'
+      ][v];
   }
+}
+
+/** 检测释义是否过于宽泛/通用（无法区分不同词汇） */
+function isGenericDefinition(def) {
+  if (!def) return true;
+  const d = def.toLowerCase();
+  const GENERIC_PATTERNS = [
+    /^referring to a (person|place|thing|object|item|being)/,
+    /^(representing|naming|identifying) (something|anything|an? \w+)/,
+    /^(a word used to|a term for|denoting|meaning)/,
+    /^(describing|giving|expressing|modifying|indicating) (a |an |something )?(quality|characteristic|attribute|property|feature)/,
+    /^(to perform|to carry out|an action|an activity|an act|a deed)/,
+  ];
+  return GENERIC_PATTERNS.some(p => p.test(d));
 }
 
 /**
@@ -862,10 +915,10 @@ async function generateFallback(words, level, batchIndex, pool) {
     const thinkTag = THINKING_TAGS[i % THINKING_TAGS.length];
     const pattern = SENTENCE_PATTERNS[i % SENTENCE_PATTERNS.length];
 
-    // 最终安全扫描：option_defs 绝不能等于（或包含）任何选项词
+    // 最终安全扫描：option_defs 绝不能等于（或包含）任何选项词，也不能过于宽泛通用
     const safeOptionDefs = optionDefs.map((d, di) => {
       const dClean = stripLite(d || '').toLowerCase();
-      if (!d || options.some(o => dClean === o.toLowerCase() || dClean.includes(o.toLowerCase()))) {
+      if (!d || options.some(o => dClean === o.toLowerCase() || dClean.includes(o.toLowerCase())) || isGenericDefinition(d)) {
         return fallbackDefForPos(pos, i + di + 99);  // 兜底替换，用偏移量避免与上面的重复
       }
       return d;
@@ -880,7 +933,7 @@ async function generateFallback(words, level, batchIndex, pool) {
       topic_category: topicCat,
       thinking_tag: thinkTag,
       template: pattern,
-      definition: (info.definition && !info.definition.toLowerCase().includes(word.toLowerCase())) ? stripLite(info.definition) : fallbackDefForPos(pos, i + 77),
+      definition: (info.definition && !info.definition.toLowerCase().includes(word.toLowerCase()) && !isGenericDefinition(info.definition)) ? stripLite(info.definition) : fallbackDefForPos(pos, i + 77),
       option_defs: safeOptionDefs,
       chinese
     });
@@ -922,7 +975,38 @@ function isQuestionValid(q) {
   const s = String(q.sentence || '').toLowerCase();
   if (!/_{4,}/.test(s)) return false;                                           // 句子必须含挖空
   if (new RegExp('\\b' + escapeRegExp(w) + '\\b', 'i').test(s)) return false;   // 句子残留答案词（未被挖空）
+  if (isTemplateSentence(s, w)) return false;                                   // 拦截模板句
   return true;
+}
+
+/**
+ * 检测是否为模板句（同一句式套不同目标词的假句子）
+ * 模板句特征：句子去掉空白标记后，结构高度通用，换任何同词性词都成立
+ */
+function isTemplateSentence(sentence, word) {
+  if (!sentence) return true;
+  const s = sentence.toLowerCase().trim();
+  // 常见模板短语列表（这些短语出现在句中几乎一定是模板句）
+  const TEMPLATE_PHRASES = [
+    /\bis frequently cited as\b/,
+    /\bplays?\s+(a\s+)?(crucial|key|important|vital|significant|pivotal|essential)\s+role\b/,
+    /\bcannot be (overstated|overemphasized|ignored|neglected)\b/,
+    /\bhas become increasingly\s+(common|popular|prevalent|widespread|important)\b/,
+    /\bis widely (regarded|considered|believed|recognized|acknowledged)\s+(to be\s+)?(an? )?(important|essential|crucial|significant|vital)\b/,
+    /\bthere is no doubt that\b/,
+    /\bit is (widely|generally|universally|commonly)\s+(accepted|agreed|believed|recognized)\s+that\b/,
+    /\bin (recent|modern|today's|current)\s+(years?|times?|society|world)\b.*\bhas (drawn|attracted|received|gained)\b.*(attention|interest|concern|praise|criticism)\b/,
+    /\bthe (importance|significance|value|role|impact|effect)\s+of\b.*\b(cannot|can\s+not)\s+(be\s+)?(ignored|overlooked|denied|underestimated|dismissed)\b/,
+    /\braises?\s+(questions?|issues?|concerns?)\s+(that\s+)?(remain|are)\s+(largely|mostly|still|yet)\s+(unresolved|unanswered|unclear|open)\b/,
+    /\bhas (reshaped|transformed|revolutionized|changed|altered)\s+(the\s+)?way\b/,
+    /\bfew would (deny|dispute|argue|question)\s+that\b/,
+  ];
+  if (TEMPLATE_PHRASES.some(p => p.test(s))) return true;
+
+  // 额外检测：如果句子中不含任何该词的语义相关词汇（基于简单启发），可能也是模板
+  // 此处不做复杂NLP，仅靠上面的短语匹配已能拦截大部分模板
+
+  return false;
 }
 
 /**

@@ -449,7 +449,7 @@ function generateLookalikeGrid(target, confusers) {
 
 // ABCD 选项网格（填空：先选高亮，再点「确定答案」提交）
 // 每个选项显示：选项词 + 简短释义（帮助区分近义词）
-function OptionGrid({ q, selectedWord, isCorrect, onSelect }) {
+function OptionGrid({ q, selectedWord, isCorrect, onSelect, showDefs }) {
   const w = (q.word || q.correct_answer || '').toLowerCase();
   const optSet = new Set((q.options || []).map(o => String(o).toLowerCase()).filter(Boolean));
   return (
@@ -474,11 +474,13 @@ function OptionGrid({ q, selectedWord, isCorrect, onSelect }) {
         if (!def || defLower === w || optSet.has(defLower)) def = '';
         // 作答后：正确项打✓前缀
         const prefix = (isCorrect !== null && isRight) ? '✓ ' : '';
+        // 仅在 showDefs=true 或已作答(isCorrect!==null) 时显示释义
+        const revealDef = showDefs || (isCorrect !== null);
         return (
           <button key={i} onClick={() => onSelect(opt)} disabled={isCorrect !== null} className={'py-2.5 px-3 ' + cls}>
             <span className="text-gray-300 mr-1.5 text-xs">{String.fromCharCode(65 + i)}.</span><span className="font-medium">{stripChinese(opt)}</span>
-            {def && <div className="text-[10px] mt-0.5 opacity-80 leading-tight">{prefix}{def}</div>}
-            {!def && isCorrect === null && <div className="text-[10px] mt-0.5 opacity-40 italic">（暂无释义）</div>}
+            {revealDef && def && <div className="text-[10px] mt-0.5 opacity-80 leading-tight">{prefix}{def}</div>}
+            {revealDef && !def && isCorrect === null && <div className="text-[10px] mt-0.5 opacity-40 italic">（暂无释义）</div>}
           </button>
         );
       })}
@@ -887,8 +889,8 @@ function CollocationBuilder({ q, initialResult, onCommit, onSolved }) {
     <div>
       <p className="text-[11px] text-indigo-500 mb-1">搭配拼词 · 选出能组成地道搭配的词</p>
       <p className="text-2xl font-bold text-gray-800 mb-1">{stripChinese(q.word)} <span className="text-gray-300">+</span> ______</p>
-      {q.chinese && <p className="text-xs text-gray-400 mb-3">{cnText(q.chinese)}</p>}
-      <p className="text-xs text-gray-500 mb-3 bg-gray-50 rounded px-2 py-1.5 leading-relaxed">{stripChinese(hint)}</p>
+      {q.chinese && <p className="text-sm text-orange-800 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 mb-3 leading-relaxed font-medium">{cnText(q.chinese)}</p>}
+      <p className="text-xs text-gray-500 mb-3 bg-orange-50/60 rounded px-2 py-1.5 leading-relaxed">{stripChinese(hint)}</p>
       <div className="grid grid-cols-2 gap-2">
         {q.options.map((opt, i) => {
           let cls = 'border rounded-lg text-left transition text-sm px-3 py-2.5 ';
@@ -909,7 +911,7 @@ function CollocationBuilder({ q, initialResult, onCommit, onSolved }) {
       </div>
       {isCorrect === null && picked !== null && (
         <button onClick={confirm}
-          className="mt-3 w-full text-sm bg-indigo-600 text-white py-2.5 rounded-lg hover:bg-indigo-700 font-medium">
+          className="mt-3 w-full text-sm bg-orange-500 text-white py-2.5 rounded-lg hover:bg-orange-600 font-medium shadow-sm">
           确定答案
         </button>
       )}
@@ -1180,7 +1182,7 @@ function LookAlike({ q, initialResult, onCommit, onSolved }) {
         <p className="text-xl font-bold text-indigo-800">{target}</p>
         {q.definition && stripChinese(q.definition) && <p className="text-[10px] text-indigo-400 mt-0.5">{stripChinese(q.definition)}</p>}
       </div>
-      {q.chinese && <p className="text-xs text-gray-500 mb-2">🔍 提示：{cnText(q.chinese)}</p>}
+      {q.chinese && <p className="text-sm text-orange-800 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 mb-2 leading-relaxed font-medium">🔍 提示：{cnText(q.chinese)}</p>}
       {q.sentence && <p className="text-[10px] text-gray-400 mb-2 italic">"{q.sentence}"</p>}
       <div className="grid gap-1 mb-2" style={{ gridTemplateColumns: `repeat(${size}, 1fr)` }}>
         {grid.map((row, r) => row.map((w, c) => {
@@ -1941,7 +1943,7 @@ export default function Practice() {
 
             {/* 中文翻译 */}
             {q?.chinese && (
-              <p className="text-gray-500 italic">💬 {typeof q.chinese === 'object' ? JSON.stringify(q.chinese) : cnText(String(q.chinese))}</p>
+              <p className="text-sm text-orange-800 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 italic font-medium">💬 {typeof q.chinese === 'object' ? JSON.stringify(q.chinese) : cnText(String(q.chinese))}</p>
             )}
 
             {/* 学生答案 */}
@@ -2186,7 +2188,7 @@ export default function Practice() {
               {/* —— 句子填空 —— */}
               {activeMode === 'sentence_fill' && (
                 <>
-                  {q.chinese && <p className="text-xs text-gray-400 mb-2 leading-relaxed">{cnText(q.chinese)}</p>}
+                  {q.chinese && <p className="text-sm text-orange-800 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 mb-2 leading-relaxed font-medium">{cnText(q.chinese)}</p>}
                   <p className="text-base leading-relaxed mb-4 text-gray-800">
                     {safeSentence(q).split(/_{4,}/).map((part, idx, arr) => (
                       <span key={idx}>{part}{idx < arr.length - 1 && <span className="inline-block min-w-[80px] mx-0.5 border-b-2 border-indigo-300"></span>}</span>
@@ -2212,7 +2214,7 @@ export default function Practice() {
                       </div>
                     </div>
                   )}
-                  <OptionGrid q={q} selectedWord={selectedWord} isCorrect={isCorrect} onSelect={selectFill} />
+                  <OptionGrid q={q} selectedWord={selectedWord} isCorrect={isCorrect} onSelect={selectFill} showDefs={showHint || isCorrect !== null} />
                   {isCorrect === null && selectedWord !== null && (
                     <button onClick={confirmFill}
                       className="mt-3 w-full text-sm bg-indigo-600 text-white py-2.5 rounded-lg hover:bg-indigo-700 font-medium">
@@ -2245,7 +2247,7 @@ export default function Practice() {
                     }
                     return <p className="text-2xl font-bold text-indigo-700 mb-1">{displayWord || '—'}</p>;
                   })()}
-                  {q.chinese && <p className="text-xs text-gray-400 mb-3">{cnText(q.chinese)}</p>}
+                  {q.chinese && <p className="text-sm text-orange-800 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 mb-3 leading-relaxed font-medium">{cnText(q.chinese)}</p>}
                   <div className="grid grid-cols-1 gap-2">
                     {defChoices.map((c, i) => {
                       let cls = 'border rounded-lg text-left transition text-sm px-3 py-2.5 ';
@@ -2363,7 +2365,7 @@ export default function Practice() {
                         const rawCn = cnText(q.chinese || q.zh || '');
                         const w = (q.word || '').toLowerCase();
                         const isLeaking = rawCn && rawCn.toLowerCase() === w;
-                        if ((q.chinese || q.zh) && !isLeaking) return <p className="text-xs text-blue-800">{rawCn}</p>;
+                        if ((q.chinese || q.zh) && !isLeaking) return <p className="text-sm text-orange-800 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 leading-relaxed font-medium">{rawCn}</p>;
                         return <p className="text-xs text-blue-600">（暂无中文提示）</p>;
                       })()}
                       {buildHintLevel >= 2 && (() => {
@@ -2491,7 +2493,7 @@ export default function Practice() {
                         const rawCn = cnText(q.chinese || q.zh || '');
                         const w = (q.word || '').toLowerCase();
                         const isLeaking = rawCn && rawCn.toLowerCase() === w;
-                        if ((q.chinese || q.zh) && !isLeaking) return <p className="text-xs text-blue-800">{rawCn}</p>;
+                        if ((q.chinese || q.zh) && !isLeaking) return <p className="text-sm text-orange-800 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 leading-relaxed font-medium">{rawCn}</p>;
                         return <p className="text-xs text-blue-600">（暂无中文提示）</p>;
                       })()}
                       {chunkHintLevel >= 2 && (() => {
@@ -2699,8 +2701,8 @@ export default function Practice() {
               finishPractice();
               navigate('/');
             }}
-              className="text-[10px] text-gray-400 border border-gray-200 rounded px-3 py-1 hover:bg-gray-50 hover:text-gray-600 transition">
-              提交并退出
+              className="text-xs bg-orange-500 text-white border-0 rounded-lg px-4 py-2 hover:bg-orange-600 font-medium shadow-sm transition">
+              ✅ 提交并退出
             </button>
           </div>
 
