@@ -214,8 +214,9 @@ app.get('/api/teacher/rooms', authMiddleware, (req, res) => {
   const db = readDB();
   const rooms = db.rooms.filter(r => r.teacher_id === req.user.id).map(room => {
     const joinedCount = db.studentRooms.filter(sr => sr.room_id === room.id).length;
+    // 只统计有实际答题记录的练习会话（finished_at + total_questions > 0），过滤幽灵学生
     const practiceStudentIds = db.practiceSessions
-      .filter(ps => ps.room_id === room.id)
+      .filter(ps => ps.room_id === room.id && ps.finished_at && (ps.total_questions || 0) > 0)
       .map(ps => ps.student_id);
     const practiceCount = new Set(practiceStudentIds).size;
     // 去重：加入列表 + 练习记录里的学生（取并集）
@@ -257,10 +258,10 @@ app.get('/api/room/:roomCode', (req, res) => {
     const mode = k.slice(sep + 1);
     if (rid === room.id) usage[mode] = (usage[mode] || 0) + v;
   });
-  // 统计学生人数（合并 studentRooms + practiceSessions 去重）
+  // 统计学生人数（合并 studentRooms + 有实际答题记录的 practiceSessions 去重）
   const joinedIds = db.studentRooms.filter(sr => sr.room_id === room.id).map(sr => sr.student_id);
   const practiceIds = db.practiceSessions
-    .filter(ps => Number(ps.room_id) === room.id)
+    .filter(ps => Number(ps.room_id) === room.id && ps.finished_at && (ps.total_questions || 0) > 0)
     .map(ps => ps.student_id)
     .filter(id => !joinedIds.includes(id));
   const allStudentIds = [...new Set([...joinedIds, ...practiceIds])];
@@ -1710,10 +1711,13 @@ app.get('/api/teacher/room/:roomId/students', authMiddleware, (req, res) => {
   const db = readDB();
   const roomId = parseInt(req.params.roomId);
   // 合并：正式加入的学生 + 有过已完成练习记录但没点加入的学生（去重）
+  // 要求练习记录必须 finished_at 且 total_questions > 0，过滤掉"点开即走"的空会话（幽灵学生）
   const joinedIds = db.studentRooms.filter(sr => Number(sr.room_id) === roomId).map(sr => sr.student_id);
-  // 只统计有 finished_at 的已完成会话，过滤掉点了开始但未提交的残留空记录
-  const finishedInRoom = db.practiceSessions.filter(ps => Number(ps.room_id) === roomId && ps.finished_at);
-  const practiceIds = finishedInRoom
+  // 只统计有 finished_at 且至少答了1题的已完成会话
+  const meaningfulSessions = db.practiceSessions.filter(ps =>
+    Number(ps.room_id) === roomId && ps.finished_at && (ps.total_questions || 0) > 0
+  );
+  const practiceIds = meaningfulSessions
     .map(ps => ps.student_id)
     .filter(id => !joinedIds.includes(id));
   const studentIds = [...new Set([...joinedIds, ...practiceIds])];
