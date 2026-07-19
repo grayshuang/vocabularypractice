@@ -399,6 +399,16 @@ const FALLBACK_TEMPLATES = {
 };
 
 const BATCH_SIZE = 10;
+
+// 通用干扰词池（当词汇表词数不足4个时，从此处补齐选项）
+const COMMON_DISTRACTORS = [
+  'significant', 'essential', 'crucial', 'substantial', 'considerable',
+  'remarkable', 'adequate', 'sufficient', 'appropriate', 'relevant',
+  'beneficial', 'effective', 'efficient', 'reliable', 'consistent',
+  'apparent', 'evident', 'obvious', 'distinct', 'particular',
+  'complex', 'diverse', 'extensive', 'various', 'numerous'
+];
+
 // 词库缓存版本号：每次修改题目生成质量（如修复模板句/脏数据）后 +1，
 // 旧版本缓存自动失效，下次请求强制重新 AI 生成干净句子，无需手动清库。
 const CACHE_VERSION = 6;
@@ -570,7 +580,22 @@ ${JSON.stringify(wordBatch)}
   } catch (err) {
     console.error(`批次 ${batchIndex + 1} AI生成失败：`, err.message);
     // 高质量降级模板生成（每个词有独立句子）
-    return generateFallback(wordBatch, level, batchIndex);
+    try {
+      return await generateFallback(wordBatch, level, batchIndex);
+    } catch (fbErr) {
+      // fallback 自身也出错时，返回最简兜底题目（确保永远不崩页面）
+      console.error(`批次 ${batchIndex + 1} fallback也失败：`, fbErr.message);
+      return (wordBatch || []).map(cleanWordEntry).filter(Boolean).map(w => ({
+        word: w, pos: posGuess(w),
+        sentence: `The use of ${w} has become increasingly common in modern society.`,
+        options: shuffleArray([w, 'significant', 'essential', 'crucial'].filter(o => o !== w).slice(0, 3).concat(w)),
+        correct_answer: w,
+        topic_category: '社会类', thinking_tag: '效率', template: 'It is widely argued that...',
+        definition: `${w} (${posGuess(w)})`,
+        option_defs: ['（释义暂缺）', '（释义暂缺）', '（释义暂缺）', '（释义暂缺）'],
+        chinese: `（关于 ${w} 的句子翻译待补充）`
+      }));
+    }
   }
 }
 
@@ -670,6 +695,7 @@ function fallbackDefForPos(pos, word) {
  * - option_defs 尽量用真实词典释义，缺失则用词性兜底
  */
 async function generateFallback(words, level, batchIndex, pool) {
+  try {
   const cleaned = words.map(cleanWordEntry).filter(Boolean);
   const distractorPool = (pool && pool.length ? pool : words).map(cleanWordEntry).filter(Boolean);
   // 并行查所有目标词 + 干扰词池（确保干扰词也有释义可用）
@@ -754,6 +780,20 @@ async function generateFallback(words, level, batchIndex, pool) {
     });
   }
   return out;
+  } catch (innerErr) {
+    // 任何意外错误时返回最简可用题目（绝不抛出）
+    console.error('generateFallback 内部异常:', innerErr.message);
+    return (words || []).map(cleanWordEntry).filter(Boolean).map(w => ({
+      word: w, pos: posGuess(w),
+      sentence: `The use of ${w} has become increasingly common in modern society.`,
+      options: shuffleArray([w, 'significant', 'essential', 'crucial'].filter(o => o !== w).slice(0, 3).concat(w)),
+      correct_answer: w,
+      topic_category: '社会类', thinking_tag: '效率', template: 'It is widely argued that...',
+      definition: `${w} (${posGuess(w)})`,
+      option_defs: ['（释义暂缺）', '（释义暂缺）', '（释义暂缺）', '（释义暂缺）'],
+      chinese: `（关于 ${w} 的句子翻译待补充）`
+    }));
+  }
 }
 
 /**
