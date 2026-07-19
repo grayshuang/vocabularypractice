@@ -5,7 +5,16 @@ const bcrypt = require('bcryptjs');
 const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
-const { readDB, writeDB, genId, initDB, pgDirectUpsertStudent, pgDirectUpsertTeacher, pgDirectUpdateTeacherPassword, pgDirectUpdateStudentPassword, pgDirectInsertStudentRoom } = require('./database');
+const {
+  readDB, writeDB, genId, initDB,
+  pgDirectUpsertStudent, pgDirectUpsertTeacher,
+  pgDirectUpdateTeacherPassword, pgDirectUpdateStudentPassword, pgDirectInsertStudentRoom,
+  pgDirectUpsertRoom, pgDirectDeleteRoomCascade,
+  pgDirectUpdateStudentRoomNote, pgDirectDeleteStudentRoom,
+  pgDirectInsertSession, pgDirectUpdateSessionFinish, pgDirectUpdateSessionNote, pgDirectDeleteSession,
+  pgDirectInsertAnswer, pgDirectUpsertWordStat, pgDirectInsertProgress,
+  pgDirectUpsertWordBank, pgDirectUpsertModeUsage, pgDirectUpdateTeacherStatus
+} = require('./database');
 require('dotenv').config();
 
 const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY || 'sk-ws-H.EMMRIEX.R8AI.MEYCIQDJ1GJsAv151M-597KePV61HGBgNvQCCeSMk8t_cgSQ_gIhAN4qPEm62ug1YIIA4Qq920SmNn3JM2f13MpGhSCYy2a9';
@@ -195,6 +204,8 @@ app.post('/api/room/create', authMiddleware, (req, res) => {
   };
   db.rooms.push(room);
   writeDB(db);
+  // 增量直写（绕过全表 TRUNCATE，防止部署/重启时用旧缓存覆盖清空）
+  pgDirectUpsertRoom(room).catch(e => console.error('⚠️ 房间创建直写 PG 失败：', e.message));
   res.json({ message: '房间创建成功', room_code, roomId: room.id });
 });
 
@@ -228,6 +239,8 @@ app.delete('/api/room/:roomCode', authMiddleware, (req, res) => {
   db.studentRooms = db.studentRooms.filter(sr => sr.room_id !== roomId);
   db.rooms.splice(roomIdx, 1);
   writeDB(db);
+  // 级联删除房间及其练习数据（增量，绝不全表 TRUNCATE）
+  pgDirectDeleteRoomCascade(roomId).catch(e => console.error('⚠️ 房间删除直写 PG 失败：', e.message));
   res.json({ message: '房间已删除' });
 });
 
@@ -299,6 +312,7 @@ app.post('/api/student/room/note', authMiddleware, (req, res) => {
   if (!sr) return res.status(404).json({ error: '尚未加入该房间' });
   sr.note = (note || '').toString().slice(0, 200);
   writeDB(db);
+  pgDirectUpdateStudentRoomNote(req.user.id, room.id, sr.note).catch(e => console.error('⚠️ 房间备注直写 PG 失败：', e.message));
   res.json({ message: '备注已保存', note: sr.note });
 });
 
@@ -314,6 +328,8 @@ app.post('/api/student/room/leave', authMiddleware, (req, res) => {
   db.studentRooms = db.studentRooms.filter(s => !(s.student_id === req.user.id && s.room_id === room.id));
   writeDB(db);
   if (db.studentRooms.length === before) return res.status(404).json({ error: '尚未加入该房间' });
+  // 增量删除该加入关系（与内存缓存保持一致）
+  pgDirectDeleteStudentRoom(req.user.id, room.id).catch(e => console.error('⚠️ 离开房间直写 PG 失败：', e.message));
   res.json({ message: '已从房间列表移除' });
 });
 
@@ -633,6 +649,7 @@ async function getQuestionsCached(vocabularyList, level) {
   const bank = db.wordBank || [];
   const result = [];
   const missing = [];
+  const newEntries = [];
 
   for (let i = 0; i < vocabularyList.length; i++) {
     const rawW = vocabularyList[i];
@@ -657,7 +674,7 @@ async function getQuestionsCached(vocabularyList, level) {
       if (Array.isArray(q.options)) q.options = q.options.map(cleanWordEntry);
       const key = (q.word || '').toLowerCase();
       if (key && !bank.find(b => b.word.toLowerCase() === key && (b.level || '6') === lv)) {
-        bank.push({
+        const entry = {
           word: q.word,
           level: lv,
           cache_version: CACHE_VERSION,
@@ -671,12 +688,22 @@ async function getQuestionsCached(vocabularyList, level) {
           definition: q.definition || '',
           option_defs: q.option_defs || [],
           topic_category: q.topic_category || ''
-        });
+        };
+        bank.push(entry);
+        newEntries.push(entry);
       }
       result.push(shuffleQuestion({ ...q, sentence: ensureBlank(q.sentence, q.word) }));
     });
     db.wordBank = bank;
     writeDB(db);
+    // 增量直写新生成的词条（绕过全表 TRUNCATE，防止词库/账号在部署时被旧缓存覆盖清空）
+    for (const entry of newEntries) {
+      try {
+        await pgDirectUpsertWordBank(entry);
+      } catch (e) {
+        console.error('⚠️ 词库直写 PG 失败：', e.message);
+      }
+    }
     console.log('词库缓存已更新，当前词条数：', bank.length);
   }
 
@@ -1178,6 +1205,12 @@ app.post('/api/practice/start', authMiddleware, (req, res) => {
     };
   db.practiceSessions.push(session);
   writeDB(db);
+  // 增量直写（绕过全表 TRUNCATE）
+  pgDirectInsertSession(session).catch(e => console.error('⚠️ 练习会话直写 PG 失败：', e.message));
+  keys.forEach(m => {
+    const usageKey = room.id + ':' + m;
+    pgDirectUpsertModeUsage(usageKey, db.modeUsage[usageKey]).catch(e => console.error('⚠️ 模式使用计数直写 PG 失败：', e.message));
+  });
   res.json({ sessionId: session.id });
 });
 
@@ -1185,19 +1218,21 @@ app.post('/api/practice/answer', authMiddleware, (req, res) => {
   if (req.user.type !== 'student') return res.status(403).json({ error: '无权限' });
   const { session_id, question, student_answer, correct_answer, word, is_correct, mode, uid } = req.body;
   const db = readDB();
-  db.practiceAnswers.push({
+  const answer = {
     id: genId(db.practiceAnswers),
     session_id: parseInt(session_id),
     question, student_answer, correct_answer, word, uid,
     is_correct: is_correct ? 1 : 0,
     answered_at: new Date().toISOString()
-  });
-  if (word) updateWordStats(db, req.user.id, parseInt(session_id), word, is_correct);
+  };
+  db.practiceAnswers.push(answer);
+  const stat = updateWordStats(db, req.user.id, parseInt(session_id), word, is_correct);
   // 断点续做进度记录
   db.studentProgress = db.studentProgress || [];
   const session = db.practiceSessions.find(s => s.id === parseInt(session_id));
+  let progress = null;
   if (session && word) {
-    db.studentProgress.push({
+    progress = {
       id: genId(db.studentProgress),
       student_id: req.user.id,
       room_id: session.room_id,
@@ -1205,9 +1240,14 @@ app.post('/api/practice/answer', authMiddleware, (req, res) => {
       mode: mode || session.mode_type || 'unknown',
       is_correct: is_correct ? 1 : 0,
       answered_at: new Date().toISOString()
-    });
+    };
+    db.studentProgress.push(progress);
   }
   writeDB(db);
+  // 增量直写（绕过全表 TRUNCATE）
+  pgDirectInsertAnswer(answer).catch(e => console.error('⚠️ 答案直写 PG 失败：', e.message));
+  if (stat) pgDirectUpsertWordStat(stat).catch(e => console.error('⚠️ 词统计直写 PG 失败：', e.message));
+  if (progress) pgDirectInsertProgress(progress).catch(e => console.error('⚠️ 进度直写 PG 失败：', e.message));
   res.json({ message: '答案已记录' });
 });
 
@@ -1224,21 +1264,23 @@ app.post('/api/practice/finish', authMiddleware, (req, res) => {
       if (pause_count !== undefined) session.pause_count = Math.max(0, parseInt(pause_count) || 0);
       session.finished_at = new Date().toISOString();
     writeDB(db);
+    // 增量更新会话成绩（绕过全表 TRUNCATE）
+    pgDirectUpdateSessionFinish(session).catch(e => console.error('⚠️ 练习结束直写 PG 失败：', e.message));
   }
   res.json({ message: '练习会话已结束' });
 });
 
 function updateWordStats(db, student_id, session_id, word, is_correct) {
   const session = db.practiceSessions.find(s => s.id === session_id);
-  if (!session) return;
-  const stat = db.wordStats.find(ws => ws.student_id === student_id && ws.room_id === session.room_id && ws.word === word);
+  if (!session) return null;
+  let stat = db.wordStats.find(ws => ws.student_id === student_id && ws.room_id === session.room_id && ws.word === word);
   if (stat) {
     stat.total_attempts += 1;
     if (!is_correct) stat.error_count += 1;
     stat.error_rate = parseFloat(((stat.error_count / stat.total_attempts) * 100).toFixed(2));
     stat.updated_at = new Date().toISOString();
   } else {
-    db.wordStats.push({
+    stat = {
       id: genId(db.wordStats),
       student_id,
       room_id: session.room_id,
@@ -1248,8 +1290,10 @@ function updateWordStats(db, student_id, session_id, word, is_correct) {
       total_attempts: 1,
       error_rate: is_correct ? 0 : 100,
       updated_at: new Date().toISOString()
-    });
+    };
+    db.wordStats.push(stat);
   }
+  return stat;
 }
 
 // ==================== 学生房间列表（含进度，用于首页展示/续做） ====================
@@ -1378,6 +1422,7 @@ app.post('/api/student/history/note', authMiddleware, (req, res) => {
   if (!session) return res.status(404).json({ error: '记录不存在' });
   session.note = (note || '').toString().slice(0, 200);
   writeDB(db);
+  pgDirectUpdateSessionNote(session_id, session.note).catch(e => console.error('⚠️ 历史备注直写 PG 失败：', e.message));
   res.json({ message: '备注已保存', note: session.note });
 });
 
@@ -1390,6 +1435,8 @@ app.post('/api/student/history/delete', authMiddleware, (req, res) => {
   if (idx === -1) return res.status(404).json({ error: '记录不存在' });
   db.practiceSessions.splice(idx, 1);
   writeDB(db);
+  // 级联删除会话及其答案（增量，绝不全表 TRUNCATE）
+  pgDirectDeleteSession(session_id).catch(e => console.error('⚠️ 历史删除直写 PG 失败：', e.message));
   res.json({ message: '已删除练习记录' });
 });
 
@@ -1568,6 +1615,7 @@ app.put('/api/admin/teacher/:id/status', authMiddleware, (req, res) => {
   if (!teacher) return res.status(404).json({ error: '教师不存在' });
   teacher.is_active = req.body.is_active;
   writeDB(db);
+  pgDirectUpdateTeacherStatus(teacher.id, teacher.is_active).catch(e => console.error('⚠️ 教师状态直写 PG 失败：', e.message));
   res.json({ message: '状态已更新' });
 });
 

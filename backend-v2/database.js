@@ -480,6 +480,200 @@ async function pgDirectInsertStudentRoom(sr) {
   }
 }
 
+// ==================== 增量直写函数（持久化主力，绝不全表 TRUNCATE）====================
+// 设计原则：每个写路径在修改内存缓存（writeDB）后，额外调用对应的增量直写函数，
+// 把变更精确落地到 PG（UPSERT / INSERT / UPDATE / DELETE）。数据只增不减，
+// 重新部署后从 PG 读回完整数据，账号/房间/练习记录永不丢失。
+
+async function bumpSeq(client, table) {
+  try {
+    await client.query(`SELECT setval('${table}_id_seq', COALESCE((SELECT MAX(id) FROM ${table}), 0))`);
+  } catch (e) { /* 序列不存在时忽略 */ }
+}
+
+async function pgDirectUpsertRoom(room) {
+  if (!pool) throw new Error('PG 未初始化');
+  const client = await pool.connect();
+  try {
+    await client.query(
+      `INSERT INTO rooms (id, room_code, teacher_id, vocabulary_list, practice_modes, mode_word_map, level, created_at)
+       VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7,$8)
+       ON CONFLICT (id) DO UPDATE SET
+         room_code=EXCLUDED.room_code, teacher_id=EXCLUDED.teacher_id,
+         vocabulary_list=EXCLUDED.vocabulary_list, practice_modes=EXCLUDED.practice_modes,
+         mode_word_map=EXCLUDED.mode_word_map, level=EXCLUDED.level
+       RETURNING id`,
+      [room.id, room.room_code, room.teacher_id, JSON.stringify(room.vocabulary_list), JSON.stringify(room.practice_modes || []), JSON.stringify(room.mode_word_map || {}), room.level || '6', room.created_at]
+    );
+    await bumpSeq(client, 'rooms');
+  } finally { client.release(); }
+}
+
+async function pgDirectDeleteRoomCascade(roomId) {
+  if (!pool) throw new Error('PG 未初始化');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM practice_answers WHERE session_id IN (SELECT id FROM practice_sessions WHERE room_id=$1)', [roomId]);
+    await client.query('DELETE FROM practice_sessions WHERE room_id=$1', [roomId]);
+    await client.query('DELETE FROM word_stats WHERE room_id=$1', [roomId]);
+    await client.query('DELETE FROM student_progress WHERE room_id=$1', [roomId]);
+    await client.query('DELETE FROM student_rooms WHERE room_id=$1', [roomId]);
+    await client.query('DELETE FROM rooms WHERE id=$1', [roomId]);
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally { client.release(); }
+}
+
+async function pgDirectUpdateStudentRoomNote(student_id, room_id, note) {
+  if (!pool) throw new Error('PG 未初始化');
+  const client = await pool.connect();
+  try {
+    await client.query('UPDATE student_rooms SET note=$1 WHERE student_id=$2 AND room_id=$3', [note || '', student_id, room_id]);
+  } finally { client.release(); }
+}
+
+async function pgDirectDeleteStudentRoom(student_id, room_id) {
+  if (!pool) throw new Error('PG 未初始化');
+  const client = await pool.connect();
+  try {
+    await client.query('DELETE FROM student_rooms WHERE student_id=$1 AND room_id=$2', [student_id, room_id]);
+  } finally { client.release(); }
+}
+
+async function pgDirectInsertSession(session) {
+  if (!pool) throw new Error('PG 未初始化');
+  const client = await pool.connect();
+  try {
+    await client.query(
+      `INSERT INTO practice_sessions (id, student_id, room_id, mode_type, score, total_questions, correct_count, elapsed_time, pause_count, started_at, finished_at, note)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT (id) DO UPDATE SET student_id=EXCLUDED.student_id, room_id=EXCLUDED.room_id, mode_type=EXCLUDED.mode_type, started_at=EXCLUDED.started_at
+       RETURNING id`,
+      [session.id, session.student_id, session.room_id, session.mode_type, session.score, session.total_questions, session.correct_count, session.elapsed_time, session.pause_count, session.started_at, session.finished_at, session.note || '']
+    );
+    await bumpSeq(client, 'practice_sessions');
+  } finally { client.release(); }
+}
+
+async function pgDirectUpdateSessionFinish(session) {
+  if (!pool) throw new Error('PG 未初始化');
+  const client = await pool.connect();
+  try {
+    await client.query(
+      `UPDATE practice_sessions SET score=$1, total_questions=$2, correct_count=$3, elapsed_time=$4, pause_count=$5, finished_at=$6 WHERE id=$7`,
+      [session.score, session.total_questions, session.correct_count, session.elapsed_time, session.pause_count, session.finished_at, session.id]
+    );
+  } finally { client.release(); }
+}
+
+async function pgDirectUpdateSessionNote(sessionId, note) {
+  if (!pool) throw new Error('PG 未初始化');
+  const client = await pool.connect();
+  try {
+    await client.query('UPDATE practice_sessions SET note=$1 WHERE id=$2', [note || '', sessionId]);
+  } finally { client.release(); }
+}
+
+async function pgDirectDeleteSession(sessionId) {
+  if (!pool) throw new Error('PG 未初始化');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM practice_answers WHERE session_id=$1', [sessionId]);
+    await client.query('DELETE FROM practice_sessions WHERE id=$1', [sessionId]);
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally { client.release(); }
+}
+
+async function pgDirectInsertAnswer(answer) {
+  if (!pool) throw new Error('PG 未初始化');
+  const client = await pool.connect();
+  try {
+    await client.query(
+      `INSERT INTO practice_answers (id, session_id, question, student_answer, correct_answer, word, uid, is_correct, answered_at)
+       VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (id) DO NOTHING
+       RETURNING id`,
+      [answer.id, answer.session_id, JSON.stringify(answer.question), answer.student_answer, answer.correct_answer, answer.word, answer.uid, answer.is_correct, answer.answered_at]
+    );
+    await bumpSeq(client, 'practice_answers');
+  } finally { client.release(); }
+}
+
+async function pgDirectUpsertWordStat(stat) {
+  if (!pool) throw new Error('PG 未初始化');
+  const client = await pool.connect();
+  try {
+    await client.query(
+      `INSERT INTO word_stats (id, student_id, room_id, word, pos, error_count, total_attempts, error_rate, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (student_id, room_id, word) DO UPDATE SET
+         error_count=EXCLUDED.error_count, total_attempts=EXCLUDED.total_attempts, error_rate=EXCLUDED.error_rate, updated_at=EXCLUDED.updated_at
+       RETURNING id`,
+      [stat.id, stat.student_id, stat.room_id, stat.word, stat.pos, stat.error_count, stat.total_attempts, stat.error_rate, stat.updated_at]
+    );
+    await bumpSeq(client, 'word_stats');
+  } finally { client.release(); }
+}
+
+async function pgDirectInsertProgress(progress) {
+  if (!pool) throw new Error('PG 未初始化');
+  const client = await pool.connect();
+  try {
+    await client.query(
+      `INSERT INTO student_progress (id, student_id, room_id, word, mode, is_correct, answered_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (id) DO NOTHING
+       RETURNING id`,
+      [progress.id, progress.student_id, progress.room_id, progress.word, progress.mode, progress.is_correct, progress.answered_at]
+    );
+    await bumpSeq(client, 'student_progress');
+  } finally { client.release(); }
+}
+
+async function pgDirectUpsertWordBank(entry) {
+  if (!pool) throw new Error('PG 未初始化');
+  const client = await pool.connect();
+  try {
+    await client.query(
+      `INSERT INTO word_bank (id, word, level, pos, sentence, options, correct_answer, topic, template, chinese, definition, option_defs, topic_category)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12::jsonb,$13)
+       ON CONFLICT (word, level) DO UPDATE SET
+         pos=EXCLUDED.pos, sentence=EXCLUDED.sentence, options=EXCLUDED.options, correct_answer=EXCLUDED.correct_answer,
+         topic=EXCLUDED.topic, template=EXCLUDED.template, chinese=EXCLUDED.chinese, definition=EXCLUDED.definition,
+         option_defs=EXCLUDED.option_defs, topic_category=EXCLUDED.topic_category
+       RETURNING id`,
+      [entry.id, entry.word, entry.level, entry.pos, entry.sentence, JSON.stringify(entry.options), entry.correct_answer, entry.topic, entry.template, entry.chinese, entry.definition, JSON.stringify(entry.option_defs), entry.topic_category]
+    );
+    await bumpSeq(client, 'word_bank');
+  } finally { client.release(); }
+}
+
+async function pgDirectUpsertModeUsage(key, count) {
+  if (!pool) throw new Error('PG 未初始化');
+  const client = await pool.connect();
+  try {
+    await client.query(
+      `INSERT INTO mode_usage (key, count) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET count=$2`,
+      [key, count]
+    );
+  } finally { client.release(); }
+}
+
+async function pgDirectUpdateTeacherStatus(id, is_active) {
+  if (!pool) throw new Error('PG 未初始化');
+  const client = await pool.connect();
+  try {
+    await client.query('UPDATE teachers SET is_active=$1 WHERE id=$2', [is_active, id]);
+  } finally { client.release(); }
+}
+
 // ==================== 统一对外接口（与原 API 完全兼容）====================
 
 function readDB() {
@@ -508,17 +702,13 @@ async function readDBAsync() {
 }
 
 function writeDB(data) {
-  // 同步写入（兼容现有代码），PG 模式下标记脏数据异步刷盘
+  // 【重要】PG 模式下：writeDB 只更新内存缓存，不做任何落盘。
+  // 真正的持久化由各端点的「增量直写函数」（pgDirectXxx）完成。
+  // 历史版本会触发 pgWriteAll 对全库 11 张表执行 TRUNCATE 后按内存缓存重插，
+  // 一旦内存缓存在部署/重启/多实例并存瞬间不完整，就会用旧快照把账号全量覆盖清空。
+  // 现彻底禁用全表 TRUNCATE 回写，改为纯增量 UPSERT/INSERT/UPDATE/DELETE，数据只增不减，永不丢失。
   if (pgReady && pool) {
-    // ⚠️ 防护：缓存尚未从数据库加载完成前，拒绝任何写入。
-    // 否则一次空数据写回会触发 pgWriteAll 的 TRUNCATE，清空整个数据库。
-    if (!_cacheLoaded) {
-      console.error('⚠️ [writeDB] 缓存尚未从数据库加载完成，拒绝写入（避免用空数据清空全库）');
-      return;
-    }
-    _dirtyData = data;
-    _cachedDB = data; // 立即更新缓存，确保同一次请求内后续 readDB 拿到最新
-    _scheduleFlush();
+    _cachedDB = data; // 仅更新内存缓存，供同步读（readDB）使用
     return;
   }
   jsonWrite(data);
@@ -547,43 +737,14 @@ function _isDangerousEmpty(data) {
   return t === 0 && s === 0 && r === 0;
 }
 
+// ⚠️ 已废弃：全表 TRUNCATE 回写机制（pgWriteAll）是数据丢失的根源，已彻底禁用。
+// 现持久化完全由各端点的增量直写函数（pgDirectXxx）完成，数据只增/改/删，绝不被缓存快照整体覆盖。
+// 保留以下函数签名仅为兼容潜在引用，内部不再执行任何 TRUNCATE 写回。
 function _scheduleFlush() {
-  if (_flushTimer) return; // 已有定时器等待中
-  _flushTimer = setTimeout(async () => {
-    _flushTimer = null;
-    if (_dirtyData && pool) {
-      // ⚠️ 防护：核心表同时为空 = 缓存损坏，拒绝 TRUNCATE 写回
-      if (_isDangerousEmpty(_dirtyData)) {
-        console.error('⚠️ [flushDB] 检测到空数据集（teachers/students/rooms 全空），拒绝 TRUNCATE 写回，已放弃本次写盘以防清空全库');
-        _dirtyData = null;
-        return;
-      }
-      try {
-        await pgWriteAll(_dirtyData);
-        _dirtyData = null;
-      } catch (e) {
-        console.error('PostgreSQL 写入失败:', e.message);
-      }
-    }
-  }, 100); // 100ms 批量合并写入
+  // 故意空操作：不再触发 pgWriteAll 的全表 TRUNCATE 重写。
 }
-
-// 强制立即刷新（用于关键操作后确保持久化）
 async function flushDB() {
-  if (_flushTimer) {
-    clearTimeout(_flushTimer);
-    _flushTimer = null;
-  }
-  if (_dirtyData && pool) {
-    // ⚠️ 防护：核心表同时为空 = 缓存损坏，拒绝 TRUNCATE 写回
-    if (_isDangerousEmpty(_dirtyData)) {
-      console.error('⚠️ [flushDB] 检测到空数据集（teachers/students/rooms 全空），拒绝 TRUNCATE 写回，已放弃本次写盘以防清空全库');
-      _dirtyData = null;
-      return;
-    }
-    await pgWriteAll(_dirtyData);
-    _dirtyData = null;
-  }
+  // 故意空操作：持久化已由增量直写函数负责，无需全量回写。
 }
 
 async function initDB() {
@@ -615,4 +776,4 @@ async function initDB() {
   }
 }
 
-module.exports = { readDB, readDBAsync, writeDB, genId, initDB, flushDB, pgDirectUpsertStudent, pgDirectUpsertTeacher, pgDirectUpdateTeacherPassword, pgDirectUpdateStudentPassword, pgDirectInsertStudentRoom, isPG: () => pgReady };
+module.exports = { readDB, readDBAsync, writeDB, genId, initDB, flushDB, pgDirectUpsertStudent, pgDirectUpsertTeacher, pgDirectUpdateTeacherPassword, pgDirectUpdateStudentPassword, pgDirectInsertStudentRoom, pgDirectUpsertRoom, pgDirectDeleteRoomCascade, pgDirectUpdateStudentRoomNote, pgDirectDeleteStudentRoom, pgDirectInsertSession, pgDirectUpdateSessionFinish, pgDirectUpdateSessionNote, pgDirectDeleteSession, pgDirectInsertAnswer, pgDirectUpsertWordStat, pgDirectInsertProgress, pgDirectUpsertWordBank, pgDirectUpsertModeUsage, pgDirectUpdateTeacherStatus, isPG: () => pgReady };
