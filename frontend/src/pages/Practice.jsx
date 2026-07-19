@@ -981,7 +981,7 @@ function SentenceSearch({ q, initialResult, onCommit, onSolved, distractorPool }
       return `${x},${y}`;
     }).filter(Boolean).join(' ');
     setHintCoords(pts);
-  }, [grid, size, path, hint1, hint2]);
+  }, [grid, size, path, hint1, hint2, hint3]);
 
   useEffect(() => { updateHintCoords(); }, [updateHintCoords]);
   // 窗口缩放时重算
@@ -1059,12 +1059,12 @@ function SentenceSearch({ q, initialResult, onCommit, onSolved, distractorPool }
         {/* SVG 虚线穿针 — 基于实际DOM坐标，不错位 */}
         {showHint && hintCoords && (
           <svg className="absolute inset-0 w-full h-full pointer-events-none z-10"
-            viewBox={`0 0 ${hintSvgW} ${hintSvgH}`}>
+            viewBox={`0 0 ${hintSvgW} ${hintSvgH}`} preserveAspectRatio="none">
             <polyline
               fill="none"
-              stroke="rgba(217,119,6,0.3)"
-              strokeWidth="0.8"
-              strokeDasharray="3,4"
+              stroke="rgba(234,88,12,0.9)"
+              strokeWidth="4"
+              strokeDasharray="9,7"
               strokeLinecap="round"
               strokeLinejoin="round"
               points={hintCoords}
