@@ -411,7 +411,7 @@ const COMMON_DISTRACTORS = [
 
 // 词库缓存版本号：每次修改题目生成质量（如修复模板句/脏数据）后 +1，
 // 旧版本缓存自动失效，下次请求强制重新 AI 生成干净句子，无需手动清库。
-const CACHE_VERSION = 6;
+const CACHE_VERSION = 7;
 
 // 不同目标分数对应的句子复杂度指导（注入到 AI 生成 prompt）
 const LEVEL_GUIDE = {
@@ -708,11 +708,46 @@ async function generateFallback(words, level, batchIndex, pool) {
   const posMap = {};
   allLookupWords.forEach(w => { posMap[w.toLowerCase()] = (infoMap[w.toLowerCase()] || {}).pos || posGuess(w); });
 
-  const out = [];
+  // ===== 第一遍：构建每道题的句子（不含中文）=====
+  const rawQuestions = [];
   for (let i = 0; i < cleaned.length; i++) {
     const word = cleaned[i];
     const info = infoMap[word.toLowerCase()] || { pos: '', definition: '', example: '', chinese: '' };
     const pos = info.pos || posGuess(word);
+
+    let sentence;
+    if (info.example && info.example.toLowerCase().includes(word.toLowerCase()) && new RegExp(escapeRegExp(word), 'gi').test(info.example)) {
+      sentence = truncateSentence(info.example.replace(new RegExp(escapeRegExp(word), 'gi'), '______'), 28);
+    } else {
+      const tb = FALLBACK_TEMPLATES[pos] || FALLBACK_TEMPLATES.n;
+      sentence = truncateSentence(tb[(i + batchIndex * BATCH_SIZE) % tb.length].t.replace('{w}', '______'), 28);
+    }
+    if (!/_{4,}/.test(sentence)) {
+      const tb = FALLBACK_TEMPLATES[pos] || FALLBACK_TEMPLATES.n;
+      sentence = truncateSentence(tb[(i + batchIndex * BATCH_SIZE) % tb.length].t.replace('{w}', '______'), 28);
+    }
+    sentence = sentence.trim();
+    if (sentence.length > 0) {
+      sentence = sentence[0].toUpperCase() + sentence.slice(1);
+      if (!/[.!?]$/.test(sentence)) sentence += '.';
+    }
+
+    rawQuestions.push({ word, pos, info, sentence });
+  }
+
+  // ===== 并行翻译所有整句（关键：循环外 Promise.all，不串行等待）=====
+  const sentencesToTranslate = rawQuestions.map(rq => ({
+    original: rq.sentence.replace(/_{4,}/g, rq.word),  // 还原答案词用于翻译
+    index: rq.rawIndex
+  }));
+  const translations = await Promise.all(
+    sentencesToTranslate.map(st => translateSentence(st.original).catch(() => ''))
+  );
+
+  // ===== 第二遍：组装完整题目（含整句中文翻译）=====
+  const out = [];
+  for (let i = 0; i < cleaned.length; i++) {
+    const { word, pos, info, sentence } = rawQuestions[i];
 
     // 取 3 个同批干扰词（确保不重复、不是答案词本身）
     const othersRaw = distractorPool.filter(w => w && w.toLowerCase() !== word.toLowerCase());
@@ -733,28 +768,9 @@ async function generateFallback(words, level, batchIndex, pool) {
       return fallbackDefForPos(posMap[oKey] || 'n', o);
     });
 
-    // 句子：优先用词典真实例句（含目标词→挖空），否则模板句
-    let sentence;
-    if (info.example && info.example.toLowerCase().includes(word.toLowerCase()) && new RegExp(escapeRegExp(word), 'gi').test(info.example)) {
-      sentence = truncateSentence(info.example.replace(new RegExp(escapeRegExp(word), 'gi'), '______'), 28);
-    } else {
-      const tb = FALLBACK_TEMPLATES[pos] || FALLBACK_TEMPLATES.n;
-      sentence = truncateSentence(tb[(i + batchIndex * BATCH_SIZE) % tb.length].t.replace('{w}', '______'), 28);
-    }
-    if (!/_{4,}/.test(sentence)) {
-      const tb = FALLBACK_TEMPLATES[pos] || FALLBACK_TEMPLATES.n;
-      sentence = truncateSentence(tb[(i + batchIndex * BATCH_SIZE) % tb.length].t.replace('{w}', '______'), 28);
-    }
-    sentence = sentence.trim();
-    if (sentence.length > 0) {
-      sentence = sentence[0].toUpperCase() + sentence.slice(1);
-      if (!/[.!?]$/.test(sentence)) sentence += '.';
-    }
-
-    // 中文：词级词典翻译（已并行查完）→ 模板中文 → 占位符
-    // 注意：不在此处调用 translateSentence（整句翻译需额外HTTP，串行等待会导致超时）
-    // 整句翻译作为后续优化，当前优先保证 fallback 响应速度（<5s 完成全批生成）
-    let chinese = info.chinese || '';
+    // 中文优先级：整句并行翻译 > 词级词典翻译 > 模板中文 > 占位符
+    let chinese = translations[i] || '';
+    if (!chinese) chinese = info.chinese || '';
     if (!chinese) {
       const tmplC = FALLBACK_TEMPLATES[pos] ? FALLBACK_TEMPLATES[pos][(i + batchIndex * BATCH_SIZE) % FALLBACK_TEMPLATES[pos].length].c : '';
       chinese = tmplC ? tmplC.replace('{w}', word) : '';
