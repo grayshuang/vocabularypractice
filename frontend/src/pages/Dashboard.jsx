@@ -78,7 +78,8 @@ export default function Dashboard() {
       });
       if (unique.length === 0) { setError('请至少输入一个单词'); return; }
       // 校验：检测中文、词性标注等非纯英文内容
-      const dirtyWords = unique.filter(w => /[一-鿿㐀-䶿]/.test(w) || /\s*(adj|adv|n|v|vi?|vt|prep|conj|pron|det|int|aux|art|num|abbr|phr)\.?\s*$/i.test(w));
+      // 词性标注必须前有空白（独立token），避免 "recommendation" 等以 n/v 结尾的单词误判
+      const dirtyWords = unique.filter(w => /[一-鿿㐀-䶿]/.test(w) || /(?:\s|\s|^)((?:adj|adv|n|v|vi?|vt|prep|conj|pron|det|int|aux|art|num|abbr|phr)\.?)\s*$/i.test(w));
       if (dirtyWords.length > 0) {
         setError('⚠️ 以下词条包含中文或词性标注，请只输入纯英文单词（一行一个或逗号分隔）：\n' + dirtyWords.join('、'));
         return;
