@@ -748,6 +748,83 @@ async function translateSentence(sentence) {
   return '';
 }
 
+/* 薄弱词汇真实例句缓存（模块级，服务器生命周期内复用，避免重复打外部 API） */
+const exampleCache = new Map();
+
+/**
+ * 为薄弱词抓取「真实词典例句」（非模板套句）。
+ * - 例句必须包含该词本身（保证是真实语境句，而非套用的假例句）
+ * - 并行抓取：词典例句 + 词的中文义 + 例句的中文翻译
+ * - 任何一步超时/失败都优雅降级，绝不抛出（避免拖垮薄弱词接口）
+ * 返回 { example_en, example_zh, word_zh }
+ */
+async function fetchWordExample(rawWord) {
+  const word = cleanWordEntry(rawWord);
+  const lower = word.toLowerCase();
+  if (!word) return { example_en: '', example_zh: '', word_zh: '' };
+  if (exampleCache.has(lower)) return exampleCache.get(lower);
+
+  let example_en = '', example_zh = '', word_zh = '';
+
+  // 1) 词典真实例句（含该词）+ 2) 词的中文义，并行抓取
+  const dictP = (async () => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    try {
+      const r = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`, { signal: ctrl.signal });
+      if (r.ok) {
+        const data = await r.json();
+        const first = Array.isArray(data) ? data[0] : data;
+        if (first && first.meanings && first.meanings.length) {
+          for (const m of first.meanings.slice(0, 3)) {
+            const d = m.definitions && m.definitions[0];
+            if (d && d.example && d.example.toLowerCase().includes(lower) && !example_en) {
+              example_en = d.example;
+              break;
+            }
+          }
+        }
+      }
+    } catch (_) { /* 词典源不可达 */ }
+    finally { clearTimeout(timer); }
+  })();
+
+  const zhP = (async () => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    try {
+      const r = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(word)}&langpair=en|zh-CN`, { signal: ctrl.signal });
+      if (r.ok) {
+        const j = await r.json();
+        const tx = j.responseData && j.responseData.translatedText;
+        if (tx && tx.toUpperCase() !== word.toUpperCase()) word_zh = tx.split(/[；;、]/)[0].trim() || '';
+      }
+    } catch (_) { /* 翻译源不可达 */ }
+    finally { clearTimeout(timer); }
+  })();
+
+  await Promise.all([dictP, zhP]);
+
+  // 3) 例句的中文翻译（best-effort，依赖上一步拿到的例句）
+  if (example_en) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    try {
+      const r = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(example_en)}&langpair=en|zh-CN`, { signal: ctrl.signal });
+      if (r.ok) {
+        const j = await r.json();
+        const tx = j.responseData && j.responseData.translatedText;
+        if (tx && tx !== example_en) example_zh = tx.split(/[；;、]/)[0].trim() || '';
+      }
+    } catch (_) { /* 翻译源不可达 */ }
+    finally { clearTimeout(timer); }
+  }
+
+  const result = { example_en, example_zh, word_zh };
+  exampleCache.set(lower, result);
+  return result;
+}
+
 /** 根据词性生成兜底释义（当词典查不到干扰词定义时使用）。variant 用于同词性产生不同措辞避免重复。 */
 function fallbackDefForPos(pos, variant) {
   // 注意：绝不把原词嵌入返回值，否则前端 strip 后会变成裸词泄露答案
@@ -1904,7 +1981,7 @@ app.get('/api/lookup', authMiddleware, async (req, res) => {
   }
 });
 
-app.get('/api/student/weak-words', authMiddleware, (req, res) => {
+app.get('/api/student/weak-words', authMiddleware, async (req, res) => {
   if (req.user.type !== 'student') return res.status(403).json({ error: '无权限' });
   const { sort = 'error_rate', order = 'desc', min_error_rate, search, limit } = req.query;
   const db = readDB();
@@ -1937,8 +2014,31 @@ app.get('/api/student/weak-words', authMiddleware, (req, res) => {
     const lim = parseInt(limit);
     if (!isNaN(lim) && lim > 0) weakWords = weakWords.slice(0, lim);
   }
+
   // 兜底清洗：历史脏数据（早期版本存入的 "awareness n"）在读取时也需净化
-  res.json(weakWords.map(w => ({ ...w, word: cleanWordEntry(w.word) })));
+  const base = weakWords.map(w => ({ ...w, word: cleanWordEntry(w.word) }));
+
+  // 为每词并行抓取真实词典例句（含该词本身的真实语境句，非模板套句）；
+  // 模块级缓存复用，失败优雅降级，绝不阻断响应。整体加 9s 超时护栏，
+  // 外部 API 过慢时直接返回无例句的主数据，不让薄弱词接口整体卡死。
+  let enriched = base;
+  try {
+    const enrichment = Promise.allSettled(
+      base.slice(0, 50).map(async (w) => {
+        const ex = await fetchWordExample(w.word);
+        return { ...w, example_en: ex.example_en, example_zh: ex.example_zh, word_zh: ex.word_zh };
+      })
+    );
+    const guard = new Promise((resolve) => setTimeout(() => resolve(null), 9000));
+    const results = await Promise.race([enrichment, guard]);
+    if (results) {
+      enriched = base.map((w, i) => (results[i] && results[i].status === 'fulfilled' ? results[i].value : w));
+    }
+  } catch (_) {
+    // 任何意外都不影响薄弱词主数据返回
+  }
+
+  res.json(enriched);
 });
 
 // ==================== 教师数据查询 ====================

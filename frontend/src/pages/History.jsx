@@ -55,21 +55,27 @@ export default function History() {
   }, []);
 
   const loadData = async () => {
-    try {
-      const [historyRes, weakWordsRes] = await Promise.all([
-        api.getHistory(),
-        api.getWeakWords()
-      ]);
+    setLoading(true);
+    // 历史与薄弱词分开加载，互不影响：任一个接口报错都不应连累另一个变空白
+    const [hRes, wRes] = await Promise.allSettled([
+      api.getHistory(),
+      api.getWeakWords()
+    ]);
+    if (hRes.status === 'fulfilled') {
+      const historyRes = hRes.value;
       setHistory(historyRes);
       const init = {};
       historyRes.forEach(h => { init[h.session_id] = h.note || ''; });
       setNoteInputs(init);
-      setWeakWords(weakWordsRes);
-    } catch (err) {
-      console.error('加载数据失败', err);
-    } finally {
-      setLoading(false);
+    } else {
+      console.error('加载练习历史失败', hRes.reason);
     }
+    if (wRes.status === 'fulfilled') {
+      setWeakWords(wRes.value);
+    } else {
+      console.error('加载薄弱词汇失败', wRes.reason);
+    }
+    setLoading(false);
   };
 
   const loadWeakWords = async () => {
@@ -353,14 +359,28 @@ export default function History() {
               </div>
             ) : (
               weakWords.map((w, i) => (
-                <div key={i} className="bg-white rounded-xl shadow-sm px-4 py-2.5 flex items-center justify-between">
-                  <span className="font-medium text-gray-800 truncate">{w.word}</span>
-                  <div className="flex items-center gap-3 text-xs shrink-0">
-                    <span className="text-gray-400">错{w.error_count}/共{w.total_attempts}</span>
-                    <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${w.error_rate > 50 ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-600'}`}>
-                      {w.error_rate}%
+                <div key={i} className="bg-white rounded-xl shadow-sm px-4 py-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium text-gray-800 truncate">
+                      {w.word}
+                      {w.word_zh ? <span className="text-xs text-gray-400 ml-1">（{w.word_zh}）</span> : null}
                     </span>
+                    <div className="flex items-center gap-3 text-xs shrink-0">
+                      <span className="text-gray-400">错{w.error_count}/共{w.total_attempts}</span>
+                      <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${w.error_rate > 50 ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-600'}`}>
+                        {w.error_rate}%
+                      </span>
+                    </div>
                   </div>
+                  {/* 真实词典例句（非模板套句） */}
+                  {w.example_en ? (
+                    <div className="mt-1.5 bg-orange-50 border border-orange-200 rounded px-2.5 py-1.5">
+                      <p className="text-xs text-orange-900 leading-snug">{w.example_en}</p>
+                      {w.example_zh && <p className="text-[11px] text-orange-700 mt-0.5 leading-snug">{w.example_zh}</p>}
+                    </div>
+                  ) : (
+                    <p className="mt-1 text-[11px] text-gray-300 italic">暂无真实例句</p>
+                  )}
                 </div>
               ))
             )}
