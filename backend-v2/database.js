@@ -674,6 +674,41 @@ async function pgDirectUpdateTeacherStatus(id, is_active) {
   } finally { client.release(); }
 }
 
+/**
+ * 直接从 PG 查询某学生的已完结练习历史（绕过内存缓存）。
+ * 用于 history 接口的 fallback：当内存缓存为空/缺失时，确保不丢失 PG 中真实存在的数据。
+ */
+async function pgDirectGetStudentHistory(studentId) {
+  if (!pool) return [];
+  try {
+    const rows = await pgQuery(
+      `SELECT ps.id, ps.student_id, ps.room_id, ps.mode_type, ps.score,
+              ps.total_questions, ps.correct_count, ps.finished_at,
+              COALESCE(ps.note, '') AS note, r.room_code
+       FROM practice_sessions ps
+       LEFT JOIN rooms r ON r.id = ps.room_id
+       WHERE ps.student_id = $1 AND ps.finished_at IS NOT NULL
+       ORDER BY ps.finished_at DESC`,
+      [studentId]
+    );
+    return rows.map(r => ({
+      session_id: r.id,
+      student_id: r.student_id,
+      room_id: r.room_id,
+      room_code: r.room_code || '未知',
+      mode_type: r.mode_type,
+      score: r.score,
+      total_questions: r.total_questions,
+      correct_count: r.correct_count,
+      finished_at: r.finished_at,
+      note: r.note || ''
+    }));
+  } catch (e) {
+    console.error('⚠️ PG 直查学生历史失败：', e.message);
+    return [];
+  }
+}
+
 // ==================== 统一对外接口（与原 API 完全兼容）====================
 
 function readDB() {
@@ -776,4 +811,4 @@ async function initDB() {
   }
 }
 
-module.exports = { readDB, readDBAsync, writeDB, genId, initDB, flushDB, pgDirectUpsertStudent, pgDirectUpsertTeacher, pgDirectUpdateTeacherPassword, pgDirectUpdateStudentPassword, pgDirectInsertStudentRoom, pgDirectUpsertRoom, pgDirectDeleteRoomCascade, pgDirectUpdateStudentRoomNote, pgDirectDeleteStudentRoom, pgDirectInsertSession, pgDirectUpdateSessionFinish, pgDirectUpdateSessionNote, pgDirectDeleteSession, pgDirectInsertAnswer, pgDirectUpsertWordStat, pgDirectInsertProgress, pgDirectUpsertWordBank, pgDirectUpsertModeUsage, pgDirectUpdateTeacherStatus, isPG: () => pgReady };
+module.exports = { readDB, readDBAsync, writeDB, genId, initDB, flushDB, pgDirectUpsertStudent, pgDirectUpsertTeacher, pgDirectUpdateTeacherPassword, pgDirectUpdateStudentPassword, pgDirectInsertStudentRoom, pgDirectUpsertRoom, pgDirectDeleteRoomCascade, pgDirectUpdateStudentRoomNote, pgDirectDeleteStudentRoom, pgDirectInsertSession, pgDirectUpdateSessionFinish, pgDirectUpdateSessionNote, pgDirectDeleteSession, pgDirectInsertAnswer, pgDirectUpsertWordStat, pgDirectInsertProgress, pgDirectUpsertWordBank, pgDirectUpsertModeUsage, pgDirectUpdateTeacherStatus, pgDirectGetStudentHistory, isPG: () => pgReady };

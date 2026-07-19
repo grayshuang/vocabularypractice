@@ -13,7 +13,8 @@ const {
   pgDirectUpdateStudentRoomNote, pgDirectDeleteStudentRoom,
   pgDirectInsertSession, pgDirectUpdateSessionFinish, pgDirectUpdateSessionNote, pgDirectDeleteSession,
   pgDirectInsertAnswer, pgDirectUpsertWordStat, pgDirectInsertProgress,
-  pgDirectUpsertWordBank, pgDirectUpsertModeUsage, pgDirectUpdateTeacherStatus
+  pgDirectUpsertWordBank, pgDirectUpsertModeUsage, pgDirectUpdateTeacherStatus,
+  pgDirectGetStudentHistory
 } = require('./database');
 require('dotenv').config();
 
@@ -1886,7 +1887,7 @@ app.get('/api/practice/resume', authMiddleware, (req, res) => {
 
 // ==================== 学生历史数据 ====================
 
-app.get('/api/student/history', authMiddleware, (req, res) => {
+app.get('/api/student/history', authMiddleware, async (req, res) => {
   if (req.user.type !== 'student') return res.status(403).json({ error: '无权限' });
   const db = readDB();
   const sessions = db.practiceSessions.filter(s => s.student_id === req.user.id && s.finished_at);
@@ -1903,6 +1904,25 @@ app.get('/api/student/history', authMiddleware, (req, res) => {
       note: s.note || ''
     };
   }).sort((a, b) => new Date(b.finished_at) - new Date(a.finished_at));
+
+  // 📊 诊断日志
+  console.log(`[历史诊断] student=${req.user.id}, 内存practiceSessions总数=${db.practiceSessions.length}, 已完结匹配=${sessions.length}, 返回=${history.length}`);
+
+  // 🔁 PG fallback：内存缓存为空时直接查 PG（应对 Railway 重启/缓存不一致）
+  if (history.length === 0) {
+    console.log(`[历史fallback] 内存无记录，尝试PG直查 student=${req.user.id}...`);
+    try {
+      const pgHistory = await pgDirectGetStudentHistory(req.user.id);
+      if (pgHistory.length > 0) {
+        console.log(`[历史fallback] ✅ PG查到 ${pgHistory.length} 条记录，返回PG数据`);
+        return res.json(pgHistory);
+      }
+      console.log(`[历史fallback] PG也无记录`);
+    } catch (e) {
+      console.error(`[历史fallback] PG查询异常：`, e.message);
+    }
+  }
+
   res.json(history);
 });
 
