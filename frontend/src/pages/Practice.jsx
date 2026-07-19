@@ -448,7 +448,10 @@ function generateLookalikeGrid(target, confusers) {
 }
 
 // ABCD 选项网格（填空：先选高亮，再点「确定答案」提交）
+// 每个选项显示：选项词 + 简短释义（帮助区分近义词）
 function OptionGrid({ q, selectedWord, isCorrect, onSelect }) {
+  const w = (q.word || q.correct_answer || '').toLowerCase();
+  const optSet = new Set((q.options || []).map(o => String(o).toLowerCase()).filter(Boolean));
   return (
     <div className="grid grid-cols-2 gap-2">
       {q.options.map((opt, i) => {
@@ -465,10 +468,17 @@ function OptionGrid({ q, selectedWord, isCorrect, onSelect }) {
         } else {
           cls += 'border-gray-200 hover:border-indigo-300 active:bg-indigo-50';
         }
+        // 取该选项的释义：优先 option_defs → 若为空/泄露原词/泄露任意选项词 → 显示占位
+        let def = stripChinese((q.option_defs && q.option_defs[i]) || '');
+        const defLower = def.toLowerCase();
+        if (!def || defLower === w || optSet.has(defLower)) def = '';
+        // 作答后：正确项打✓前缀
+        const prefix = (isCorrect !== null && isRight) ? '✓ ' : '';
         return (
           <button key={i} onClick={() => onSelect(opt)} disabled={isCorrect !== null} className={'py-2.5 px-3 ' + cls}>
             <span className="text-gray-300 mr-1.5 text-xs">{String.fromCharCode(65 + i)}.</span><span className="font-medium">{stripChinese(opt)}</span>
-            {isCorrect !== null && <div className="text-[10px] mt-1 opacity-70">{(q.option_defs && q.option_defs[i]) ? (isRight ? '✓ ' : '') + stripChinese(q.option_defs[i]) : ''}</div>}
+            {def && <div className="text-[10px] mt-0.5 opacity-80 leading-tight">{prefix}{def}</div>}
+            {!def && isCorrect === null && <div className="text-[10px] mt-0.5 opacity-40 italic">（暂无释义）</div>}
           </button>
         );
       })}
@@ -617,6 +627,17 @@ function MatchMode({ q, initialResult, onCommit, onSolved }) {
     }
     return t;
   });
+  // 去重：若多个释义文本完全相同（fallbackDefForPos 重叠导致），追加序号区分
+  const defCount = {};
+  const uniqueDefs = defs.map((t, i) => {
+    const key = t;
+    defCount[key] = (defCount[key] || 0) + 1;
+    if (defCount[key] > 1 && t !== '（待匹配）') {
+      // 第二次及以后出现的重复释义 → 标注序号
+      return `${t}（${defCount[key]}）`;
+    }
+    return t;
+  });
   const n = opts.length;
 
   const [leftSel, setLeftSel] = useState(null);
@@ -651,7 +672,7 @@ function MatchMode({ q, initialResult, onCommit, onSolved }) {
   }, [q?.uid]);
 
   const leftItems = opts.map((w, i) => ({ word: w, idx: i }));
-  const rightItems = rightOrder.map(ri => ({ def: defs[ri], origIdx: ri }));
+  const rightItems = rightOrder.map(ri => ({ def: uniqueDefs[ri], origIdx: ri }));
 
   // 测量真实坐标画线
   const areaRef = useRef(null);
@@ -2208,7 +2229,22 @@ export default function Practice() {
               {activeMode === 'synonym' && (
                 <>
                   <p className="text-[11px] text-indigo-500 mb-1">同义替换 · 选出正确的英文释义</p>
-                  <p className="text-2xl font-bold text-indigo-700 mb-1">{stripChinese(q.word || q.correct_answer || '')}</p>
+                  {(() => {
+                    // 防御：确保显示的是英文原词（非中文翻译）
+                    let displayWord = stripChinese(q.word || q.correct_answer || '');
+                    // 若 word/correct_answer 含中文字符 → 从 options 中找正确答案
+                    if (/[\u4e00-\u9fff]/.test(displayWord) && q.options && q.correct_answer) {
+                      const caIdx = q.options.findIndex(o => o === q.correct_answer);
+                      if (caIdx >= 0) displayWord = stripChinese(q.options[caIdx]);
+                      else displayWord = stripChinese(q.correct_answer);
+                    }
+                    // 最终兜底：若仍含中文 → 取第一个看起来像英文的 option
+                    if (/[\u4e00-\u9fff]/.test(displayWord) && q.options) {
+                      const enOpt = q.options.find(o => /^[A-Za-z][A-Za-z'-]*$/.test(stripChinese(o)));
+                      if (enOpt) displayWord = stripChinese(enOpt);
+                    }
+                    return <p className="text-2xl font-bold text-indigo-700 mb-1">{displayWord || '—'}</p>;
+                  })()}
                   {q.chinese && <p className="text-xs text-gray-400 mb-3">{cnText(q.chinese)}</p>}
                   <div className="grid grid-cols-1 gap-2">
                     {defChoices.map((c, i) => {
@@ -2330,14 +2366,29 @@ export default function Practice() {
                         if ((q.chinese || q.zh) && !isLeaking) return <p className="text-xs text-blue-800">{rawCn}</p>;
                         return <p className="text-xs text-blue-600">（暂无中文提示）</p>;
                       })()}
-                      {buildHintLevel >= 2 && (
-                        <p className="text-xs text-blue-700 font-mono bg-white rounded px-2 py-1 mt-1">
-                          前半答案：{fullSentence(q).split(/\s+/).slice(0, Math.ceil(fullSentence(q).split(/\s+/).length * 0.6)).join(' ')}...
-                        </p>
-                      )}
-                      {buildHintLevel >= 3 && (
-                        <p className="text-xs text-red-700 font-mono bg-red-50 rounded px-2 py-1 mt-1">完整答案：{fullSentence(q)}</p>
-                      )}
+                      {buildHintLevel >= 2 && (() => {
+                        const fs = fullSentence(q);
+                        const words = fs.split(/\s+/).filter(Boolean);
+                        const mid = Math.max(1, Math.ceil(words.length * 0.55));
+                        const firstHalf = words.slice(0, mid).join(' ');
+                        if (!firstHalf) return <p className="text-xs text-blue-600">（暂无提示）</p>;
+                        return (
+                          <p className="text-xs text-blue-700 font-mono bg-white rounded px-2 py-1 mt-1 leading-relaxed">
+                            前半句：{firstHalf}<span className="text-blue-400"> …</span>
+                          </p>
+                        );
+                      })()}
+                      {buildHintLevel >= 3 && (() => {
+                        const fs = fullSentence(q);
+                        const words = fs.split(/\s+/).filter(Boolean);
+                        const letters = words.map(w => w[0]?.toUpperCase() || '?').join(' ');
+                        return (
+                          <div className="text-xs text-red-700 font-mono bg-red-50 rounded px-2 py-1.5 mt-1 space-y-0.5">
+                            <p>完整答案：<span className="font-semibold">{fs}</span></p>
+                            <p className="text-red-500">共 {words.length} 词 · 首字母：{letters}</p>
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
 
@@ -2443,15 +2494,34 @@ export default function Practice() {
                         if ((q.chinese || q.zh) && !isLeaking) return <p className="text-xs text-blue-800">{rawCn}</p>;
                         return <p className="text-xs text-blue-600">（暂无中文提示）</p>;
                       })()}
-                      {chunkHintLevel >= 2 && (
-                        <p className="text-xs text-blue-700 font-mono bg-white rounded px-2 py-1 mt-1">
-                          提示：前 {Math.ceil(chunkBlankIndices.length * 0.6)} 个空格的答案 →{' '}
-                          {chunkBlankIndices.slice(0, Math.ceil(chunkBlankIndices.length * 0.6)).map(i => chunkCorrect[i]).join(' / ')}
-                        </p>
-                      )}
-                      {chunkHintLevel >= 3 && (
-                        <p className="text-xs text-red-700 font-mono bg-red-50 rounded px-2 py-1 mt-1">完整答案：{fullSentence(q)}</p>
-                      )}
+                      {chunkHintLevel >= 2 && (() => {
+                        // 前半句：把已填充的锚点语块 + 前60%空格的正确答案拼成部分句子
+                        const nBlanks = chunkBlankIndices.length;
+                        const revealCount = Math.max(1, Math.ceil(nBlanks * 0.55));
+                        const revealIndices = chunkBlankIndices.slice(0, revealCount);
+                        const parts = chunkCorrect.map((c, i) => {
+                          if (revealIndices.includes(i)) return c;     // 揭示的前半答案
+                          if (!chunkBlankIndices.includes(i)) return c; // 锚点（非空格）始终显示
+                          return '______';                               // 未揭示的空格
+                        });
+                        const halfSentence = parts.join(' ');
+                        if (!halfSentence) return <p className="text-xs text-blue-600">（暂无提示）</p>;
+                        return (
+                          <p className="text-xs text-blue-700 font-mono bg-white rounded px-2 py-1 mt-1 leading-relaxed">
+                            前半句：{halfSentence}<span className="text-blue-400"> …</span>
+                          </p>
+                        );
+                      })()}
+                      {chunkHintLevel >= 3 && (() => {
+                        const fs = fullSentence(q);
+                        const n = chunkBlankIndices.length;
+                        return (
+                          <div className="text-xs text-red-700 font-mono bg-red-50 rounded px-2 py-1.5 mt-1 space-y-0.5">
+                            <p>完整答案：<span className="font-semibold">{fs}</span></p>
+                            <p className="text-red-500">每空格词数：{chunkBlankIndices.map(i => 1).join(' / ')} · 共 {n} 词</p>
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
 

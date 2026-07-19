@@ -411,7 +411,7 @@ const COMMON_DISTRACTORS = [
 
 // 词库缓存版本号：每次修改题目生成质量（如修复模板句/脏数据）后 +1，
 // 旧版本缓存自动失效，下次请求强制重新 AI 生成干净句子，无需手动清库。
-const CACHE_VERSION = 8;
+const CACHE_VERSION = 9;
 
 // 不同目标分数对应的句子复杂度指导（注入到 AI 生成 prompt）
 const LEVEL_GUIDE = {
@@ -676,14 +676,19 @@ async function translateSentence(sentence) {
   return '';
 }
 
-/** 根据词性生成兜底释义（当词典查不到干扰词定义时使用）。 */
-function fallbackDefForPos(pos) {
+/** 根据词性生成兜底释义（当词典查不到干扰词定义时使用）。variant 用于同词性产生不同措辞避免重复。 */
+function fallbackDefForPos(pos, variant) {
   // 注意：绝不把原词嵌入返回值，否则前端 strip 后会变成裸词泄露答案
+  const v = (variant || 0) % 4;  // 每种词性 4 种变体
   switch ((pos || 'n').toLowerCase()) {
-    case 'v': case 'vi': case 'vt': return 'to perform or carry out an action (verb)';
-    case 'adj': return 'describing a quality or characteristic (adjective)';
-    case 'adv': return 'modifying how an action is performed (adverb)';
-    case 'n': default: return 'referring to a person, place, thing, or idea (noun)';
+    case 'v': case 'vi': case 'vt':
+      return ['to perform or carry out an action (verb)', 'an action or activity (verb)', 'expressing an act or deed (verb)', 'indicating something is done (verb)'][v];
+    case 'adj':
+      return ['describing a quality or characteristic (adjective)', 'giving more information about a noun (adjective)', 'modifying or describing a thing (adjective)', 'expressing an attribute or property (adjective)'][v];
+    case 'adv':
+      return ['modifying how an action is performed (adverb)', 'telling how or when something happens (adverb)', 'qualifying an adjective or verb (adverb)', 'adding detail to the manner of action (adverb)'][v];
+    case 'n': default:
+      return ['referring to a person, place, thing, or idea (noun)', 'naming an object, concept, or entity (noun)', 'representing something that exists or can be discussed (noun)', 'a word used to identify any item or being (noun)'][v];
   }
 }
 
@@ -760,12 +765,12 @@ async function generateFallback(words, level, batchIndex, pool) {
     while (options.length < 4) options.push(`word_${options.length + 1}`);
 
     // 每个选项配释义：优先词典真实释义 → 词性兜底（绝不允许空串导致校验失败）
-    const optionDefs = options.map(o => {
+    const optionDefs = options.map((o, oi) => {
       const oKey = o.toLowerCase();
       const d = (infoMap[oKey] || {}).definition || '';
       if (d && !d.toLowerCase().includes(word.toLowerCase())) return stripLite(d);
-      // 兜底：基于该词的猜测词性生成占位释义
-      return fallbackDefForPos(posMap[oKey] || 'n');
+      // 兜底：基于该词的猜测词性 + 选项位置生成差异化占位释义
+      return fallbackDefForPos(posMap[oKey] || 'n', i + oi);
     });
 
     // 中文优先级：整句并行翻译 > 词级词典翻译 > 模板中文 > 占位符
@@ -785,7 +790,7 @@ async function generateFallback(words, level, batchIndex, pool) {
     const safeOptionDefs = optionDefs.map((d, di) => {
       const dClean = stripLite(d || '').toLowerCase();
       if (!d || options.some(o => dClean === o.toLowerCase() || dClean.includes(o.toLowerCase()))) {
-        return fallbackDefForPos(pos);  // 兜底替换，绝不泄露选项原词
+        return fallbackDefForPos(pos, i + di + 99);  // 兜底替换，用偏移量避免与上面的重复
       }
       return d;
     });
@@ -799,7 +804,7 @@ async function generateFallback(words, level, batchIndex, pool) {
       topic_category: topicCat,
       thinking_tag: thinkTag,
       template: pattern,
-      definition: (info.definition && !info.definition.toLowerCase().includes(word.toLowerCase())) ? stripLite(info.definition) : fallbackDefForPos(pos),
+      definition: (info.definition && !info.definition.toLowerCase().includes(word.toLowerCase())) ? stripLite(info.definition) : fallbackDefForPos(pos, i + 77),
       option_defs: safeOptionDefs,
       chinese
     });
@@ -808,14 +813,14 @@ async function generateFallback(words, level, batchIndex, pool) {
   } catch (innerErr) {
     // 任何意外错误时返回最简可用题目（绝不抛出）
     console.error('generateFallback 内部异常:', innerErr.message);
-    return (words || []).map(cleanWordEntry).filter(Boolean).map(w => ({
+    return (words || []).map(cleanWordEntry).filter(Boolean).map((w, wi) => ({
       word: w, pos: posGuess(w),
       sentence: `The use of ${w} has become increasingly common in modern society.`,
       options: shuffleArray([w, 'significant', 'essential', 'crucial'].filter(o => o !== w).slice(0, 3).concat(w)),
       correct_answer: w,
       topic_category: '社会类', thinking_tag: '效率', template: 'It is widely argued that...',
-      definition: fallbackDefForPos(posGuess(w)),
-      option_defs: ['（释义暂缺）', '（释义暂缺）', '（释义暂缺）', '（释义暂缺）'],
+      definition: fallbackDefForPos(posGuess(w), wi),
+      option_defs: [0,1,2,3].map(vi => fallbackDefForPos(posGuess(w), wi + vi + 10)),
       chinese: `（关于 ${w} 的句子翻译待补充）`
     }));
   }
