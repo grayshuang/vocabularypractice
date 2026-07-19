@@ -474,7 +474,7 @@ const COMMON_DISTRACTORS = [
 
 // 词库缓存版本号：每次修改题目生成质量（如修复模板句/脏数据）后 +1，
 // 旧版本缓存自动失效，下次请求强制重新 AI 生成干净句子，无需手动清库。
-const CACHE_VERSION = 14;
+const CACHE_VERSION = 15;
 
 // 不同目标分数对应的句子复杂度指导（注入到 AI 生成 prompt）
 const LEVEL_GUIDE = {
@@ -511,7 +511,7 @@ ${levelBlock}
 4. 必须正确判断并使用该词的词性，确保语法完全正确（注意动词时态、名词单复数、形容词位置）。
 5. 干扰项必须与正确答案词性相同、难度相当、但意思不同，且不能是模板套话。
 6. chinese 字段必须是对应英文句子的**完整中文翻译**（逐字对应级别），要涵盖英文句子中的**每一个**信息点，不能省略任何从句、修饰语或细节。学生需要靠中文理解整句英文的全部含义。
-7. 句子（含空白标记 ______，空白计 1 个词）总长度建议控制在 25 个单词以内，允许适度使用雅思常见复杂句型，但避免过于冗长的嵌套从句链。
+7. 句子（含空白标记 ______，空白计 1 个词）总长度**必须控制在 18 个单词以内**，优先 12-16 词的简洁句。超长嵌套从句链对组词成句/拖曳语块等模式极不友好。
 8. **以下字段绝对禁止包含任何中文字符或词性标注（adj./v./n.等）**：word、options、correct_answer、definition、option_defs、sentence。这些字段必须100%纯英文。只有 chinese 字段可以包含中文。
 9. **sentence 字段中禁止原样复制词汇列表中的原始格式**（如 "implement v."、"dense adj. 浓密"）。句子中只能出现该词的**纯英文形式**（如 "implement"、"dense"），绝不能附带词性或中文。
 10. **sentence 必须是语法完整、标点正确的句子**：首字母必须大写，句末必须有英文标点（. ? !），不能是截断的片段。这个句子会直接展示给学生作为「原句」参考。
@@ -595,8 +595,8 @@ ${JSON.stringify(wordBatch)}
       throw new Error('AI返回数据格式错误');
     }
 
-    // 限制原句长度：含空白计 1 词，最长 28 词（雅思复杂句型需要足够长度表达完整语义）
-    questions.forEach(q => { if (q && q.sentence) q.sentence = truncateSentence(q.sentence, 28); });
+    // 限制原句长度：含空白计 1 词，最长 20 词（超长句对组词成句等模式极不友好）
+    questions.forEach(q => { if (q && q.sentence) q.sentence = truncateSentence(q.sentence, 20); });
 
     // 校验：不合格的题单独用词典兜底重生成（避免垃圾数据入缓存）
     const validated = [];
@@ -895,6 +895,23 @@ function isTemplateChinese(cn) {
     /(在|从).*角度看(来|看).*/,
     /不应(被|仅仅).*视为/,
     /不(仅仅|只是|只是)是.*而是/,
+    // === 2026-07-20 截图新增：同义替换假中文新模板模式 ===
+    /虽然.*但.*(需要|引发|反映|导致|造成|分布|仍然|始终|缺乏|均匀)/,          // "虽然...但..." 学术让步模板
+    /虽然.*但.*(?:被认为|被视为|被认为是)/,                                       // "虽然X但Y被认为是"
+    /越来越倾向/,                                                                  // "越来越倾向于..."
+    /这反映了.*变化.*(?:产生|造成|带来).*影响/,                                    // "这反映了...变化对...产生影响"
+    /对.*(?:未来|当前|现代).*(政策|社会|经济).*(产生|造成|带来).*(?:深远|重大|显著).*影响/, // "对...产生了深远的影响"
+    /使.*复杂化的是.*而不仅仅/,                                                     // "使...复杂化的是...而不仅仅是"
+    /而不仅仅是.*(?:决定|影响|取决于|关乎)/,                                      // "...而不仅仅是..."
+    /在多大程度/,                                                                   // "在多大程度上"
+    /在快速变化的时代/,                                                             // "在快速变化的时代/世界中"
+    /对于.*来说.*(?:能力|技能|素质|条件).*已?(?:变得)?不可或缺/,                   // "对于...来说...已变得不可或缺"
+    /已变得不可或缺/,                                                               // "已变得不可或缺"
+    /始终需要.*资源/,                                                                // "始终需要...资源"
+    /根本缺乏/,                                                                     // "根本缺乏"
+    /(?:在|向).*(各个|不同|某些|多数|少数).*(地区|领域|方面|层面).*(分布|存在|表现).*不均匀?/,  // "在不同地区分布不均匀"
+    /似乎很.*但.*始终/,                                                              // "似乎很容易/简单，但始终..."
+    /拥有.*手指/,                                                                    // "拥有绿色手指"（have green fingers 被直译）
   ];
   return TEMPLATE_CN_PATTERNS.some(p => p.test(cn));
 }
@@ -1112,6 +1129,13 @@ function isTemplateSentence(sentence, word) {
     /\b(has|have|having)\s+become\s+(a\s+)?(common|popular|widespread)\s+(thing|phenomenon|trend)\b/i,
     /\bplays?\s+(a\s+)?(huge|big|major|important)\s+part\s+in\b/,
     /\b(is|are)\s+(often|usually|generally|frequently)\s+(associated|linked|connected)\s+with\b/,
+    // === 2026-07-20 新增：截图中的超长学术模板句 ===
+    /\bin an era (defined|characterized|marked) by\b/i,                    // "In an era defined by rapid change..."
+    /\bhas become (increasingly )?indispensable\b/i,                      // "...has become indispensable"
+    /\bfor those (hoping|seeking|trying|attempting) to (remain|stay|keep)\b/i, // "for those hoping to remain competitive"
+    /\bthe capacity to \w+ (has|have) become\b/i,                         // "the capacity to X has become..."
+    /\bto those (hoping|seeking|wishing|looking) to\b/i,                  // "to those hoping to..."
+    /\b(affecting|impacting|influencing).*(ability|capacity|potential).*\b(?:remain|stay|be)\b/i,
   ];
   if (TEMPLATE_PHRASES.some(p => p.test(s))) return true;
 
@@ -1396,7 +1420,7 @@ function applyWordCase(bankItem, originalWord) {
   }
   // 补挖空 + 重新打乱选项（含释义同步）
   item.sentence = ensureBlank(item.sentence || '', item.correct_answer);
-  item.sentence = truncateSentence(item.sentence, 28);
+  item.sentence = truncateSentence(item.sentence, 20);
   return shuffleQuestion(item);
 }
 
@@ -1787,12 +1811,66 @@ app.post('/api/practice/answer', authMiddleware, (req, res) => {
   res.json({ message: '答案已记录' });
 });
 
-app.post('/api/practice/finish', authMiddleware, (req, res) => {
+app.post('/api/practice/finish', authMiddleware, async (req, res) => {
   if (req.user.type !== 'student') return res.status(403).json({ error: '无权限' });
     const { session_id, score, total_questions, correct_count, elapsed_time, pause_count } = req.body;
+
+    // 防护：session_id 为空/NaN 时立即报错，不静默成功
+    if (!session_id || session_id === 'null' || session_id === 'undefined') {
+      console.error(`⚠️ finish收到无效session_id: "${session_id}", student=${req.user.id}`);
+      return res.status(400).json({ error: '会话ID无效，请重新开始练习' });
+    }
+
+    const sid = parseInt(session_id);
+    if (isNaN(sid)) {
+      console.error(`⚠️ finish session_id无法解析为数字: "${session_id}"`);
+      return res.status(400).json({ error: '会话ID格式错误' });
+    }
+
     const db = readDB();
-    const session = db.practiceSessions.find(s => s.id === parseInt(session_id));
+    let session = db.practiceSessions.find(s => s.id === sid);
+
+    // 🔁 内存未命中时尝试从 PG 恢复 session（应对重启/多实例）
+    if (!session) {
+      console.warn(`⚠️ finish: 内存中未找到 session id=${sid}, 尝试PG恢复...`);
+      try {
+        const { Client } = require('pg');
+        const client = new Client({ connectionString: process.env.DATABASE_URL });
+        await client.connect();
+        const pgResult = await client.query(
+          'SELECT * FROM practice_sessions WHERE id = $1', [sid]
+        );
+        if (pgResult.rows.length > 0) {
+          const row = pgResult.rows[0];
+          session = {
+            id: row.id,
+            student_id: row.student_id,
+            room_id: row.room_id,
+            mode_type: row.mode_type,
+            score: row.score,
+            total_questions: row.total_questions,
+            correct_count: row.correct_count,
+            elapsed_time: row.elapsed_time || 0,
+            pause_count: row.pause_count || 0,
+            started_at: row.started_at,
+            finished_at: row.finished_at,
+          };
+          // 写回内存缓存以便后续操作
+          db.practiceSessions.push(session);
+          writeDB(db);
+          console.log(`✅ finish: 从PG恢复 session id=${sid}`);
+        }
+        await client.end();
+      } catch (pgErr) {
+        console.error(`❌ finish PG恢复失败:`, pgErr.message);
+      }
+    }
+
     if (session) {
+      // 权限校验：确保学生只能结束自己的会话
+      if (session.student_id !== req.user.id) {
+        return res.status(403).json({ error: '无权操作此会话' });
+      }
       session.score = score;
       session.total_questions = total_questions;
       session.correct_count = correct_count;
@@ -1802,8 +1880,28 @@ app.post('/api/practice/finish', authMiddleware, (req, res) => {
     writeDB(db);
     // 增量更新会话成绩（绕过全表 TRUNCATE）
     pgDirectUpdateSessionFinish(session).catch(e => console.error('⚠️ 练习结束直写 PG 失败：', e.message));
-  }
-  res.json({ message: '练习会话已结束' });
+    } else {
+      // session 仍然找不到（内存和 PG 都没有）→ 记录详细错误
+      console.error(`❌ finish: session id=${sid} 在内存和PG中均不存在! student=${req.user.id}, 已丢弃数据: score=${score}, total=${total_questions}, correct=${correct_count}`);
+      // 尝试紧急写入：直接用 SQL INSERT 一个带 finished_at 的 session 记录
+      try {
+        const { Client } = require('pg');
+        const client = new Client({ connectionString: process.env.DATABASE_URL });
+        await client.connect();
+        await client.query(
+          `INSERT INTO practice_sessions (id, student_id, room_id, mode_type, score, total_questions, correct_count, elapsed_time, pause_count, started_at, finished_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+           ON CONFLICT (id) DO UPDATE SET score=$5, total_questions=$6, correct_count=$7, elapsed_time=$8, pause_count=$9, finished_at=NOW()`,
+          [sid, req.user.id, 0, 'unknown', score, total_questions, correct_count, elapsed_time || 0, pause_count || 0]
+        );
+        console.log(`✅ finish: 紧急PG写入成功 session id=${sid}`);
+        await client.end();
+      } catch (emergencyErr) {
+        console.error(`❌ finish 紧急PG写入也失败:`, emergencyErr.message);
+        return res.status(500).json({ error: '练习记录保存失败，请稍后重试或联系教师' });
+      }
+    }
+    res.json({ message: '练习会话已结束' });
 });
 
 function updateWordStats(db, student_id, session_id, word, is_correct) {

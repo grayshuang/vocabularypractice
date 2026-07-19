@@ -1788,7 +1788,22 @@ export default function Practice() {
     // 补录未作答的题目——只对教师发布的词汇提交，不把干扰词/选项词纳入
     const allQuestions = Object.values(questionsByMode).flat();
     const answeredUids = new Set(results.map(r => r.uid));
-    const sid = sessionId || await ensureSession();
+    let sid = sessionId || await ensureSession();
+    // 防护：如果 session 创建失败，重试一次
+    if (!sid) {
+      console.warn('⚠️ finishPractice: session_id 为空，尝试重新创建...');
+      try {
+        setSessionId(null); // 清除缓存状态强制重建
+        sid = await ensureSession();
+      } catch (e) {
+        console.error('❌ finishPractice: session 创建失败，练习数据可能无法保存', e);
+      }
+    }
+    if (!sid) {
+      console.error('❌ finishPractice: 无法获取有效 session_id，跳过提交（学生端历史将缺失）');
+      setShowResult(true);
+      return;
+    }
     // 构建教师发布词汇集合（大小写无关匹配）
     const vocabSet = new Set((vocabularyList || []).map(w => w.toLowerCase()));
     const unanswered = allQuestions.filter(q => {
