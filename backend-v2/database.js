@@ -389,6 +389,97 @@ function jsonWrite(data) {
 }
 
 
+// ==================== 直接写入（绕过整库 TRUNCATE，用于注册等核心写操作）====================
+
+/**
+ * 直接插入/更新单条学生记录（不触发全表 TRUNCATE，立即落盘）。
+ * 用于注册这类「绝不允许丢失」的核心写操作。
+ */
+async function pgDirectUpsertStudent(s) {
+  if (!pool) throw new Error('PG 未初始化');
+  const client = await pool.connect();
+  try {
+    const res = await client.query(
+      `INSERT INTO students (id, name, username, password_hash, email, student_type, class_code, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT (username) DO UPDATE SET
+         name=EXCLUDED.name, password_hash=EXCLUDED.password_hash, email=EXCLUDED.email,
+         student_type=EXCLUDED.student_type, class_code=EXCLUDED.class_code, created_at=EXCLUDED.created_at
+       RETURNING id`,
+      [s.id, s.name, s.username, s.password_hash, s.email, s.student_type, s.class_code, s.created_at]
+    );
+    return res.rows[0] ? res.rows[0].id : s.id;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * 直接插入/更新单条教师记录（同上，绕过 TRUNCATE）。
+ */
+async function pgDirectUpsertTeacher(t) {
+  if (!pool) throw new Error('PG 未初始化');
+  const client = await pool.connect();
+  try {
+    const res = await client.query(
+      `INSERT INTO teachers (id, name, username, password_hash, email, created_at, is_active)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (username) DO UPDATE SET
+         name=EXCLUDED.name, password_hash=EXCLUDED.password_hash, email=EXCLUDED.email,
+         created_at=EXCLUDED.created_at, is_active=EXCLUDED.is_active
+       RETURNING id`,
+      [t.id, t.name, t.username, t.password_hash, t.email, t.created_at, t.is_active ?? true]
+    );
+    return res.rows[0] ? res.rows[0].id : t.id;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * 直接按邮箱更新教师密码（绕过 TRUNCATE 快照）。
+ */
+async function pgDirectUpdateTeacherPassword(email, hash) {
+  if (!pool) throw new Error('PG 未初始化');
+  const client = await pool.connect();
+  try {
+    await client.query('UPDATE teachers SET password_hash = $1 WHERE LOWER(TRIM(email)) = LOWER(TRIM($2))', [hash, email]);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * 直接按邮箱更新学生密码（绕过 TRUNCATE 快照）。
+ */
+async function pgDirectUpdateStudentPassword(email, hash) {
+  if (!pool) throw new Error('PG 未初始化');
+  const client = await pool.connect();
+  try {
+    await client.query('UPDATE students SET password_hash = $1 WHERE LOWER(TRIM(email)) = LOWER(TRIM($2))', [hash, email]);
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * 直接插入单条 student_rooms 记录（绕过 TRUNCATE 快照）。
+ */
+async function pgDirectInsertStudentRoom(sr) {
+  if (!pool) throw new Error('PG 未初始化');
+  const client = await pool.connect();
+  try {
+    await client.query(
+      `INSERT INTO student_rooms (id, student_id, room_id, joined_at, note)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (student_id, room_id) DO NOTHING`,
+      [sr.id, sr.student_id, sr.room_id, sr.joined_at, sr.note || '']
+    );
+  } finally {
+    client.release();
+  }
+}
+
 // ==================== 统一对外接口（与原 API 完全兼容）====================
 
 function readDB() {
@@ -524,4 +615,4 @@ async function initDB() {
   }
 }
 
-module.exports = { readDB, readDBAsync, writeDB, genId, initDB, flushDB, isPG: () => pgReady };
+module.exports = { readDB, readDBAsync, writeDB, genId, initDB, flushDB, pgDirectUpsertStudent, pgDirectUpsertTeacher, pgDirectUpdateTeacherPassword, pgDirectUpdateStudentPassword, pgDirectInsertStudentRoom, isPG: () => pgReady };

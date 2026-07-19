@@ -5,7 +5,7 @@ const bcrypt = require('bcryptjs');
 const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
-const { readDB, writeDB, genId, initDB } = require('./database');
+const { readDB, writeDB, genId, initDB, pgDirectUpsertStudent, pgDirectUpsertTeacher, pgDirectUpdateTeacherPassword, pgDirectUpdateStudentPassword, pgDirectInsertStudentRoom } = require('./database');
 require('dotenv').config();
 
 const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY || 'sk-ws-H.EMMRIEX.R8AI.MEYCIQDJ1GJsAv151M-597KePV61HGBgNvQCCeSMk8t_cgSQ_gIhAN4qPEm62ug1YIIA4Qq920SmNn3JM2f13MpGhSCYy2a9';
@@ -31,7 +31,7 @@ function authMiddleware(req, res, next) {
 
 // ==================== 学生注册/登录 ====================
 
-app.post('/api/student/register', (req, res) => {
+app.post('/api/student/register', async (req, res) => {
   const { name, username, password, email, student_type, class_code } = req.body;
   if (!name || !username || !password || !email || !student_type) {
     return res.status(400).json({ error: '缺少必填字段' });
@@ -51,6 +51,12 @@ app.post('/api/student/register', (req, res) => {
   };
   db.students.push(student);
   writeDB(db);
+  // 直接落盘，绕过异步 TRUNCATE 快照（防止注册数据在 100ms 缓冲期内因重启/报错丢失）
+  try {
+    await pgDirectUpsertStudent(student);
+  } catch (e) {
+    console.error('⚠️ 学生注册直写 PG 失败：', e.message);
+  }
   res.json({ message: '注册成功', studentId: student.id });
 });
 
@@ -68,7 +74,7 @@ app.post('/api/student/login', (req, res) => {
 
 // ==================== 教师注册/登录 ====================
 
-app.post('/api/teacher/register', (req, res) => {
+app.post('/api/teacher/register', async (req, res) => {
   const { name, username, password, email } = req.body;
   if (!name || !username || !password || !email) return res.status(400).json({ error: '缺少必填字段' });
   const db = readDB();
@@ -82,6 +88,12 @@ app.post('/api/teacher/register', (req, res) => {
   };
   db.teachers.push(teacher);
   writeDB(db);
+  // 直接落盘，绕过异步 TRUNCATE 快照（防止注册数据在 100ms 缓冲期内因重启/报错丢失）
+  try {
+    await pgDirectUpsertTeacher(teacher);
+  } catch (e) {
+    console.error('⚠️ 教师注册直写 PG 失败：', e.message);
+  }
   res.json({ message: '注册成功', teacherId: teacher.id });
 });
 
@@ -98,7 +110,7 @@ app.post('/api/teacher/login', (req, res) => {
 });
 
 // 教师自助重置密码（只用注册邮箱验证，无需用户名 / 旧密码 / 登录）
-app.post('/api/teacher/reset-password', (req, res) => {
+app.post('/api/teacher/reset-password', async (req, res) => {
   const { email, newPassword } = req.body;
   if (!email || !newPassword) {
     return res.status(400).json({ error: '请填写注册邮箱和新密码' });
@@ -117,11 +129,17 @@ app.post('/api/teacher/reset-password', (req, res) => {
   }
   teacher.password_hash = bcrypt.hashSync(newPassword, 10);
   writeDB(db);
+  // 直接落盘，确保密码立即生效（绕过异步 TRUNCATE 快照）
+  try {
+    await pgDirectUpdateTeacherPassword(cleanEmail, teacher.password_hash);
+  } catch (e) {
+    console.error('⚠️ 教师密码直写 PG 失败：', e.message);
+  }
   res.json({ message: '密码重置成功，请用新密码登录' });
 });
 
 // 学生自助重置密码（只用注册邮箱验证，无需用户名 / 旧密码 / 登录）
-app.post('/api/student/reset-password', (req, res) => {
+app.post('/api/student/reset-password', async (req, res) => {
   const { email, newPassword } = req.body;
   if (!email || !newPassword) {
     return res.status(400).json({ error: '请填写注册邮箱和新密码' });
@@ -137,6 +155,12 @@ app.post('/api/student/reset-password', (req, res) => {
   }
   student.password_hash = bcrypt.hashSync(newPassword, 10);
   writeDB(db);
+  // 直接落盘，确保密码立即生效（绕过异步 TRUNCATE 快照）
+  try {
+    await pgDirectUpdateStudentPassword(cleanEmail, student.password_hash);
+  } catch (e) {
+    console.error('⚠️ 学生密码直写 PG 失败：', e.message);
+  }
   res.json({ message: '密码重置成功，请用新密码登录' });
 });
 
@@ -242,7 +266,7 @@ app.get('/api/room/:roomCode', (req, res) => {
   });
 });
 
-app.post('/api/room/join', authMiddleware, (req, res) => {
+app.post('/api/room/join', authMiddleware, async (req, res) => {
   if (req.user.type !== 'student') return res.status(403).json({ error: '无权限' });
   const { room_code } = req.body;
   const db = readDB();
@@ -250,8 +274,15 @@ app.post('/api/room/join', authMiddleware, (req, res) => {
   if (!room) return res.status(404).json({ error: '房间不存在' });
   const exists = db.studentRooms.some(sr => sr.student_id === req.user.id && sr.room_id === room.id);
   if (!exists) {
-    db.studentRooms.push({ id: genId(db.studentRooms), student_id: req.user.id, room_id: room.id, joined_at: new Date().toISOString(), note: '' });
+    const sr = { id: genId(db.studentRooms), student_id: req.user.id, room_id: room.id, joined_at: new Date().toISOString(), note: '' };
+    db.studentRooms.push(sr);
     writeDB(db);
+    // 直接落盘，确保加入关系立即生效（绕过异步 TRUNCATE 快照）
+    try {
+      await pgDirectInsertStudentRoom(sr);
+    } catch (e) {
+      console.error('⚠️ 加入房间直写 PG 失败：', e.message);
+    }
   }
   res.json({ message: '加入房间成功', roomId: room.id, roomCode: room.room_code });
 });
