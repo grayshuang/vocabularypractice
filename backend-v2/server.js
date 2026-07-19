@@ -107,9 +107,13 @@ app.post('/api/teacher/reset-password', (req, res) => {
     return res.status(400).json({ error: '新密码至少 4 位' });
   }
   const db = readDB();
-  const teacher = db.teachers.find(t => t.email === email);
+  const cleanEmail = String(email).trim().toLowerCase();
+  const teacher = db.teachers.find(t => (t.email || '').trim().toLowerCase() === cleanEmail);
   if (!teacher) {
-    return res.status(404).json({ error: '该邮箱未注册教师账号' });
+    // 调试：列出库里所有教师邮箱便于比对
+    const allEmails = db.teachers.map(t => `"${t.email}" (user: ${t.username})`).join(', ') || '(无)';
+    console.warn(`[reset-teacher] 邮箱 "${cleanEmail}" 未匹配。库中邮箱: ${allEmails}`);
+    return res.status(404).json({ error: '该邮箱未注册教师账号（请确认邮箱拼写，或联系管理员）' });
   }
   teacher.password_hash = bcrypt.hashSync(newPassword, 10);
   writeDB(db);
@@ -126,7 +130,8 @@ app.post('/api/student/reset-password', (req, res) => {
     return res.status(400).json({ error: '新密码至少 4 位' });
   }
   const db = readDB();
-  const student = db.students.find(s => s.email === email);
+  const cleanEmail = String(email).trim().toLowerCase();
+  const student = db.students.find(s => (s.email || '').trim().toLowerCase() === cleanEmail);
   if (!student) {
     return res.status(404).json({ error: '该邮箱未注册学生账号' });
   }

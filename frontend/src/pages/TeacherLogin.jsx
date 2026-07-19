@@ -64,12 +64,11 @@ export default function TeacherLogin({ onSuccess }) {
             {loading ? '登录中...' : '登录'}
           </button>
         </form>
-        <p className="mt-4 text-center text-sm text-gray-600">
-          还没有账号？<Link to="/register" className="text-indigo-600 hover:text-indigo-800">注册</Link>
-        </p>
-        <p className="mt-2 text-center text-xs text-gray-400">
-          <button type="button" className="hover:text-indigo-600 underline" onClick={() => setShowReset(true)}>忘记密码？</button>
-          {'  ·  '}
+        <div className="mt-4 flex items-center justify-between">
+          <Link to="/register" className="text-sm text-indigo-600 hover:text-indigo-800">还没有账号？注册</Link>
+          <button type="button" className="text-sm font-medium text-orange-600 hover:text-orange-800 underline decoration-orange-300" onClick={() => setShowReset(true)}>忘记密码？</button>
+        </div>
+        <p className="mt-3 text-center text-xs text-gray-400">
           <Link to="/admin/login" className="hover:text-red-600">管理员入口 →</Link>
         </p>
       </div>
