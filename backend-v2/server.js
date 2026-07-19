@@ -2119,6 +2119,9 @@ app.get('/api/teacher/room/:roomId/student/:studentId/details', authMiddleware, 
   const db = readDB();
   const roomId = parseInt(req.params.roomId);
   const studentId = parseInt(req.params.studentId);
+  // 取该房间当前 vocabulary_list 作为白名单，过滤掉不再发布的旧词条
+  const room = db.rooms.find(r => r.id === roomId);
+  const vocabSet = new Set((room?.vocabulary_list || []).map(w => w.toLowerCase()));
   const sessions = db.practiceSessions.filter(ps => ps.student_id === studentId && Number(ps.room_id) === roomId && ps.finished_at);
   const result = sessions.map(s => {
     const answers = db.practiceAnswers
@@ -2127,8 +2130,14 @@ app.get('/api/teacher/room/:roomId/student/:studentId/details', authMiddleware, 
         word: cleanWordEntry(a.word),
         is_correct: a.is_correct === 1,
         student_answer: cleanWordEntry(a.student_answer),
-        correct_answer: cleanWordEntry(a.correct_answer)
-      }));
+        correct_answer: cleanWordEntry(a.correct_answer),
+        mode: a.mode || ''
+      }))
+      // 过滤掉非教师发布词汇（含干扰词/旧词条）
+      .filter(a => {
+        const w = (a.word || '').toLowerCase();
+        return !w || vocabSet.has(w);
+      });
     return {
       session_id: s.id,
       finished_at: s.finished_at,
@@ -2151,7 +2160,13 @@ app.get('/api/teacher/room/:roomId/word-stats', authMiddleware, (req, res) => {
   // 验证房间属于该教师
   const room = db.rooms.find(r => r.id === roomId);
   if (!room || room.teacher_id !== req.user.id) return res.status(403).json({ error: '无权限' });
-  res.json(db.wordStats.filter(ws => Number(ws.room_id) === roomId).map(w => ({ ...w, word: cleanWordEntry(w.word) })).sort((a, b) => b.error_rate - a.error_rate));
+  // 取该房间当前 vocabulary_list 作为白名单，过滤掉不再发布的旧词
+  const vocabSet = new Set((room.vocabulary_list || []).map(w => w.toLowerCase()));
+  res.json(db.wordStats
+    .filter(ws => Number(ws.room_id) === roomId)
+    .map(w => ({ ...w, word: cleanWordEntry(w.word) }))
+    .filter(w => !w.word || vocabSet.has(w.word.toLowerCase()))
+    .sort((a, b) => b.error_rate - a.error_rate));
 });
 
 // ==================== 管理员功能 ====================
