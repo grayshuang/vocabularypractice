@@ -1606,6 +1606,11 @@ export default function Practice() {
     if (buildChecked) return;
     setBuildOrder(prev => [...(prev || []), tok]);
   };
+  // 再次点击已选语块：按位置移除（正确处理重复词），撤销该次选择
+  const removeToken = (idx) => {
+    if (buildChecked) return;
+    setBuildOrder(prev => (prev || []).filter((_, i) => i !== idx));
+  };
   const checkBuild = () => {
     if (buildChecked || !buildOrder) return;
     const correct = norm(buildOrder.join(' ')) === norm(fullSentence(currentQuestion));
@@ -2314,8 +2319,12 @@ export default function Practice() {
 
                   <div className="min-h-[44px] border rounded-lg p-2 mb-2 flex flex-wrap gap-1 items-center bg-gray-50">
                     {buildOrder?.length > 0 ? buildOrder.map((w, i) => (
-                      <span key={i} className="px-2 py-1 bg-indigo-100 text-indigo-700 rounded text-xs">{w}</span>
-                    )) : <span className="text-xs text-gray-400">点击下方单词…</span>}
+                      <button key={i} onClick={() => removeToken(i)} disabled={buildChecked}
+                        title="点击取消该词"
+                        className="group px-2 py-1 bg-indigo-100 text-indigo-700 rounded text-xs hover:bg-red-100 hover:text-red-600 transition disabled:opacity-60 disabled:cursor-default">
+                        {w}<span className="ml-1 text-indigo-300 group-hover:text-red-400">×</span>
+                      </button>
+                    )) : <span className="text-xs text-gray-400">点击下方单词…（已选的词可再次点击取消）</span>}
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {shuffledTokens.map((tok, i) => {
