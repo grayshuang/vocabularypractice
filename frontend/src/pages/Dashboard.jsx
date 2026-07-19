@@ -4,6 +4,19 @@ import api from '../api';
 import { logout } from '../auth';
 import { MODES } from '../modes';
 
+/** 清洗单个词条：去掉中文、词性标注（adj./v. 等）、括号注释，只保留纯英文单词 */
+function cleanVocabEntry(s) {
+  if (typeof s !== 'string') return (s || '').trim();
+  return s
+    .replace(/[一-鿿㐀-䶿]/g, '')                                                       // 去掉所有中文字符
+    .replace(/(?:^|\s)(?:adj|adv|prep|conj|pron|det|int|aux|art|num|abbr|phr|vi|vt|n|v)\.?(?=[\s,，.;；、。！？!?]|\)|$)/gi, ' ') // 独立词性标注
+    .replace(/[_\-](?:adj|adv|prep|conj|pron|det|int|aux|art|num|abbr|phr|vi|vt|n|v)\.?/gi, '')     // 附着词性
+    .replace(/\s*[（（][^））]*[））]\s*/g, ' ')                                          // 中文括号注释
+    .replace(/\s*\([^)]*\)\s*/g, ' ')                                                     // 英文括号注释
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export default function Dashboard() {
   const [rooms, setRooms] = useState([]);
   const [error, setError] = useState('');
@@ -77,14 +90,18 @@ export default function Dashboard() {
         unique.push(w);
       });
       if (unique.length === 0) { setError('请至少输入一个单词'); return; }
-      // 校验：检测中文、词性标注等非纯英文内容
-      // 词性标注必须前有空白（独立token），避免 "recommendation" 等以 n/v 结尾的单词误判
-      const dirtyWords = unique.filter(w => /[一-鿿㐀-䶿]/.test(w) || /(?:\s|\s|^)((?:adj|adv|n|v|vi?|vt|prep|conj|pron|det|int|aux|art|num|abbr|phr)\.?)\s*$/i.test(w));
-      if (dirtyWords.length > 0) {
-        setError('⚠️ 以下词条包含中文或词性标注，请只输入纯英文单词（一行一个或逗号分隔）：\n' + dirtyWords.join('、'));
-        return;
+      // 自动清洗：去掉中文、词性标注等，只保留纯英文单词；对含中文/词性的词条给出友好提示
+      const cleaned = unique.map(w => ({ raw: w, clean: cleanVocabEntry(w) }));
+      const dirtyItems = cleaned.filter(c => c.raw !== c.clean && c.clean);
+      if (dirtyItems.length > 0) {
+        setError('💡 已自动清洗以下词条的中文/词性标注：\n' + dirtyItems.map(c => `${c.raw} → ${c.clean}`).join('、'));
+        // 不 return，继续用清洗后的词进入下一步
+      } else {
+        setError('');
       }
-      setWords(unique);
+      const words = cleaned.map(c => c.clean).filter(Boolean);
+      if (words.length === 0) { setError('输入的词条清洗后为空，请检查格式'); return; }
+      setWords(words);
       setStep(2);
       setError('');
     } else if (step === 2) {
