@@ -81,6 +81,30 @@ function stripChinese(s) {
     .replace(/\s+/g, ' ')
     .trim();
 }
+
+// 中文提示专用：保留中文字符，仅清理词性标注与括号注释（绝不删除中文，否则中文提示会变空白）
+function cnText(s) {
+  if (typeof s !== 'string') return s || '';
+  return s
+    .replace(/(?:^|\s)(?:adj|adv|prep|conj|pron|det|int|aux|art|num|abbr|phr|vi|vt|n|v)\.?(?=[\s,，.;；、。！？!?]|\)|$)/gi, ' ')
+    .replace(/[_\-](?:adj|adv|prep|conj|pron|det|int|aux|art|num|abbr|phr|vi|vt|n|v)\.?/gi, '')
+    .replace(/\s*[（（][^））]*[））]\s*/g, ' ')
+    .replace(/\s*\([^)]*\)\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// 句子安全化：确保答案词已被挖空（______），避免原词泄漏到题干
+function safeSentence(q) {
+  const s = String(q?.sentence || '');
+  if (/_{4,}/.test(s)) return s;
+  const w = String(q?.word || q?.correct_answer || '');
+  if (w && new RegExp('\\b' + escapeReg(w) + '\\b', 'i').test(s)) {
+    return s.replace(new RegExp('\\b' + escapeReg(w) + '\\b', 'gi'), '______');
+  }
+  return s;
+}
+
 const norm = s => String(s || '').toLowerCase().replace(/[^a-z\s-]/g, '').replace(/\s+/g, ' ').trim();
 function shuffle(arr) {
   const a = [...arr];
@@ -580,7 +604,16 @@ function MemoryMatch({ words, onDone }) {
 /* ── 连线题：左词右义，测量真实坐标后画连线 ── */
 function MatchMode({ q, initialResult, onCommit, onSolved }) {
   const opts = q.options || [];
-  const defs = q.option_defs || opts.map(o => `"${o}"`);
+  const correctIdx = opts.findIndex(o => o === (q.correct_answer || q.word));
+  const w = (q.word || q.correct_answer || '').toLowerCase();
+  // 右列释义：优先用真实 option_defs；若缺失/等于原词，则正确项回退到中文，干扰项留空（绝不把原词当释义展示）
+  const defs = opts.map((o, i) => {
+    let t = stripChinese((q.option_defs && q.option_defs[i]) || '');
+    if (!t || t.toLowerCase() === o.toLowerCase() || t.toLowerCase() === w) {
+      t = (i === correctIdx && q.chinese) ? cnText(q.chinese) : '';
+    }
+    return t;
+  });
   const n = opts.length;
 
   const [leftSel, setLeftSel] = useState(null);
@@ -830,7 +863,7 @@ function CollocationBuilder({ q, initialResult, onCommit, onSolved }) {
     <div>
       <p className="text-[11px] text-indigo-500 mb-1">搭配拼词 · 选出能组成地道搭配的词</p>
       <p className="text-2xl font-bold text-gray-800 mb-1">{stripChinese(q.word)} <span className="text-gray-300">+</span> ______</p>
-      {q.chinese && <p className="text-xs text-gray-400 mb-3">{stripChinese(q.chinese)}</p>}
+      {q.chinese && <p className="text-xs text-gray-400 mb-3">{cnText(q.chinese)}</p>}
       <p className="text-xs text-gray-500 mb-3 bg-gray-50 rounded px-2 py-1.5 leading-relaxed">{stripChinese(hint)}</p>
       <div className="grid grid-cols-2 gap-2">
         {q.options.map((opt, i) => {
@@ -988,7 +1021,7 @@ function SentenceSearch({ q, initialResult, onCommit, onSolved, distractorPool }
   return (
     <div>
       <p className="text-[11px] text-indigo-500 mb-1">词格找句 · 点单词连成隐藏的句子</p>
-      {q.chinese && <p className="text-xs text-gray-500 mb-2">🔍 提示（中文）：{stripChinese(q.chinese)}</p>}
+      {q.chinese && <p className="text-xs text-gray-500 mb-2">🔍 提示（中文）：{cnText(q.chinese)}</p>}
       <div className="relative mb-2">
         {/* SVG 虚线穿针 — 基于实际DOM坐标，不错位 */}
         {showHint && hintCoords && (
@@ -1116,7 +1149,7 @@ function LookAlike({ q, initialResult, onCommit, onSolved }) {
         <p className="text-xl font-bold text-indigo-800">{target}</p>
         {q.definition && stripChinese(q.definition) && <p className="text-[10px] text-indigo-400 mt-0.5">{stripChinese(q.definition)}</p>}
       </div>
-      {q.chinese && <p className="text-xs text-gray-500 mb-2">🔍 提示：{stripChinese(q.chinese)}</p>}
+      {q.chinese && <p className="text-xs text-gray-500 mb-2">🔍 提示：{cnText(q.chinese)}</p>}
       {q.sentence && <p className="text-[10px] text-gray-400 mb-2 italic">"{q.sentence}"</p>}
       <div className="grid gap-1 mb-2" style={{ gridTemplateColumns: `repeat(${size}, 1fr)` }}>
         {grid.map((row, r) => row.map((w, c) => {
@@ -1777,10 +1810,13 @@ export default function Practice() {
 
   const defChoices = useMemo(() => {
     if (!currentQuestion) return [];
-    return (currentQuestion.options || []).map((opt, i) => ({
-      word: stripChinese(opt),
-      def: stripChinese((currentQuestion.option_defs && currentQuestion.option_defs[i]) || `"${opt}"`),
-    }));
+    const w = (currentQuestion.word || currentQuestion.correct_answer || '').toLowerCase();
+    const hasDefs = Array.isArray(currentQuestion.option_defs) && currentQuestion.option_defs.some(d => d && String(d).trim() && String(d).toLowerCase() !== w);
+    return (currentQuestion.options || []).map((opt, i) => {
+      let d = hasDefs ? stripChinese(currentQuestion.option_defs[i] || '') : '';
+      if (d.toLowerCase() === w) d = ''; // 释义若等于原词则清空，避免泄露
+      return { word: stripChinese(opt), def: d || '（暂无释义）' };
+    });
   }, [currentQuestion]);
 
   // 各模式进度摘要
@@ -1862,7 +1898,7 @@ export default function Practice() {
 
             {/* 中文翻译 */}
             {q?.chinese && (
-              <p className="text-gray-500 italic">💬 {typeof q.chinese === 'object' ? JSON.stringify(q.chinese) : stripChinese(String(q.chinese))}</p>
+              <p className="text-gray-500 italic">💬 {typeof q.chinese === 'object' ? JSON.stringify(q.chinese) : cnText(String(q.chinese))}</p>
             )}
 
             {/* 学生答案 */}
@@ -2107,12 +2143,15 @@ export default function Practice() {
               {/* —— 句子填空 —— */}
               {activeMode === 'sentence_fill' && (
                 <>
-                  {q.chinese && <p className="text-xs text-gray-400 mb-2 leading-relaxed">{stripChinese(q.chinese)}</p>}
+                  {q.chinese && <p className="text-xs text-gray-400 mb-2 leading-relaxed">{cnText(q.chinese)}</p>}
                   <p className="text-base leading-relaxed mb-4 text-gray-800">
-                    {stripChinese(q.sentence || '').split(/_{4,}/).map((part, idx, arr) => (
+                    {safeSentence(q).split(/_{4,}/).map((part, idx, arr) => (
                       <span key={idx}>{part}{idx < arr.length - 1 && <span className="inline-block min-w-[80px] mx-0.5 border-b-2 border-indigo-300"></span>}</span>
                     ))}
                   </p>
+                  {(q.options || []).length < 2 && (
+                    <p className="text-[11px] text-amber-600 mb-2">⚠️ 本题选项数据不完整，已跳过（将在下次重新生成时修复）</p>
+                  )}
                   {!answered && (q.definition || (q.option_defs && q.option_defs.length)) && (
                     <button onClick={() => setShowHint(!showHint)} className="text-[11px] text-indigo-500 mb-3 hover:text-indigo-700">{showHint ? '隐藏释义' : '💡 显示所有词汇释义'}</button>
                   )}
@@ -2146,8 +2185,8 @@ export default function Practice() {
               {/* —— 同义替换 —— */}
               {activeMode === 'synonym' && (
                 <>
-                  <p className="text-[11px] text-indigo-500 mb-1">同义替换 · 选出正确的释义</p>
-                  <p className="text-2xl font-bold text-gray-800 mb-4">{stripChinese(q.word)}</p>
+                  <p className="text-[11px] text-indigo-500 mb-1">同义替换 · 根据中文提示选出正确的英文释义</p>
+                  <p className="text-lg font-bold text-gray-800 mb-4 leading-snug">{cnText(q.chinese) || stripChinese(q.word)}</p>
                   <div className="grid grid-cols-1 gap-2">
                     {defChoices.map((c, i) => {
                       let cls = 'border rounded-lg text-left transition text-sm px-3 py-2.5 ';
@@ -2262,7 +2301,7 @@ export default function Practice() {
                   {buildHintLevel >= 1 && !buildChecked && (
                     <div className="mb-2 px-3 py-2 rounded-lg bg-blue-50 border border-blue-100 space-y-1">
                       {buildHintLevel >= 1 && (q.chinese || q.zh) && (
-                        <p className="text-xs text-blue-800">{stripChinese(q.chinese || q.zh || '')}</p>
+                        <p className="text-xs text-blue-800">{cnText(q.chinese || q.zh || '')}</p>
                       )}
                       {buildHintLevel >= 2 && (
                         <p className="text-xs text-blue-700 font-mono bg-white rounded px-2 py-1 mt-1">{getFirstHalfSentence(q)}</p>
@@ -2304,7 +2343,7 @@ export default function Practice() {
                 <>
                   <p className="text-[11px] text-indigo-500 mb-1">拼写听写 · 看释义写单词</p>
                   <div className="flex items-start gap-2 mb-1">
-                    <p className="text-sm text-gray-700 leading-relaxed flex-1">{spellingDef(q) || '—'}</p>
+                    <p className="text-sm text-gray-700 leading-relaxed flex-1">{spellingDef(q) || cnText(q.chinese) || '—'}</p>
                     <button onClick={() => speakWord(q.word || q.correct_answer || '')}
                       className="shrink-0 px-2.5 py-1 rounded-full border border-indigo-200 bg-indigo-50 text-indigo-600 text-[11px] hover:bg-indigo-100 transition flex items-center gap-1"
                       title="发音提示（请先思考语义对应拼写，实在想不到再点提示）">
@@ -2365,7 +2404,7 @@ export default function Practice() {
                   {chunkHintLevel >= 1 && !chunkChecked && (
                     <div className="mb-2 px-3 py-2 rounded-lg bg-blue-50 border border-blue-100 space-y-1">
                       {chunkHintLevel >= 1 && (q.chinese || q.zh) && (
-                        <p className="text-xs text-blue-800">{stripChinese(q.chinese || q.zh || '')}</p>
+                        <p className="text-xs text-blue-800">{cnText(q.chinese || q.zh || '')}</p>
                       )}
                       {chunkHintLevel >= 2 && (
                         <p className="text-xs text-blue-700 font-mono bg-white rounded px-2 py-1 mt-1">{getFirstHalfSentence(q)}</p>

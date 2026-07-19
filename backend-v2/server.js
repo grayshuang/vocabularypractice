@@ -400,7 +400,7 @@ const FALLBACK_TEMPLATES = {
 const BATCH_SIZE = 10;
 // 词库缓存版本号：每次修改题目生成质量（如修复模板句/脏数据）后 +1，
 // 旧版本缓存自动失效，下次请求强制重新 AI 生成干净句子，无需手动清库。
-const CACHE_VERSION = 3;
+const CACHE_VERSION = 4;
 
 // 不同目标分数对应的句子复杂度指导（注入到 AI 生成 prompt）
 const LEVEL_GUIDE = {
@@ -511,8 +511,23 @@ ${JSON.stringify(wordBatch)}
       throw new Error('AI返回数据格式错误');
     }
 
-  // 限制原句长度：含空白计 1 词，最长 28 词（雅思复杂句型需要足够长度表达完整语义）
-  questions.forEach(q => { if (q && q.sentence) q.sentence = truncateSentence(q.sentence, 28); });
+    // 限制原句长度：含空白计 1 词，最长 28 词（雅思复杂句型需要足够长度表达完整语义）
+    questions.forEach(q => { if (q && q.sentence) q.sentence = truncateSentence(q.sentence, 28); });
+
+    // 校验：不合格的题单独用词典兜底重生成（避免垃圾数据入缓存）
+    const validated = [];
+    for (let i = 0; i < questions.length; i++) {
+      const q = questions[i];
+      if (isQuestionValid(q)) {
+        validated.push(q);
+      } else {
+        const pool = wordBatch.filter((_, j) => j !== i).slice(0, 4);
+        const fb = await generateFallback([wordBatch[i], ...pool], level, i, [wordBatch[i], ...pool]);
+        if (fb.length) validated.push(fb[0]);
+      }
+    }
+    if (validated.length === 0) throw new Error('AI返回题目全部校验不合格');
+    questions = validated;
 
     // 安全清洗：确保 word/options/correct_answer/definition/option_defs 不含中文与词性标注
     const stripChinese = (s) => {
@@ -559,33 +574,115 @@ ${JSON.stringify(wordBatch)}
 }
 
 /**
- * 高质量降级方案：每个词汇都有独立的不同句子
+ * 词典查询（免费无 key 源）：Free Dictionary API 取英文释义/例句/词性，MyMemory 取中文翻译。
+ * 任一源失败都不抛错，返回空串，由调用方决定兜底。带 5s 超时避免悬挂。
  */
-function generateFallback(words, level, batchIndex) {
-  return words.map((rawWord, i) => {
-    // 清洗词汇条目：去掉中文和词性标注，只保留纯英文单词
-    const word = cleanWordEntry(rawWord);
-    // 简单词性猜测（基于清洗后的纯词）
-    let pos = 'n';
-    if (word.length <= 4 && /^[a-z]+$/i.test(word)) pos = 'adj';
-    else if (/^(be |get |go |take |make |have |do |set |put |bring |fall |grow|look|come)/i.test(word)) pos = 'v';
-    else if (word.includes(' ') || word.includes('-')) pos = 'phrase';
+async function lookupWord(rawWord) {
+  const word = cleanWordEntry(rawWord);
+  if (!word) return { word, pos: '', definition: '', example: '', chinese: '' };
+  let pos = '', definition = '', example = '', chinese = '';
+  // 1) 英文释义 + 例句 + 词性
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    const engRes = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (engRes.ok) {
+      const data = await engRes.json();
+      const first = Array.isArray(data) ? data[0] : data;
+      if (first && first.meanings && first.meanings.length) {
+        pos = first.meanings[0].partOfSpeech || '';
+        for (const m of first.meanings.slice(0, 3)) {
+          const d = m.definitions && m.definitions[0];
+          if (d && d.definition && !definition) definition = d.definition;
+          if (d && d.example && !example && d.example.toLowerCase().includes(word.toLowerCase())) example = d.example;
+          if (definition && example) break;
+        }
+      }
+    }
+  } catch (_) { /* 英文源不可达 */ }
+  // 2) 中文翻译
+  try {
+    const ctrl2 = new AbortController();
+    const timer2 = setTimeout(() => ctrl2.abort(), 5000);
+    const cnRes = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(word)}&langpair=en|zh-CN`, { signal: ctrl2.signal });
+    clearTimeout(timer2);
+    if (cnRes.ok) {
+      const cnData = await cnRes.json();
+      const t = cnData.responseData && cnData.responseData.translatedText;
+      if (t && t !== word && t.toUpperCase() !== word.toUpperCase()) {
+        chinese = t.split(/[；;、]/)[0].trim() || '';
+      }
+    }
+  } catch (_) { /* 中文源不可达 */ }
+  return { word, pos, definition: definition || '', example, chinese };
+}
 
-    const templateBank = FALLBACK_TEMPLATES[pos] || FALLBACK_TEMPLATES.n;
-    const tmpl = templateBank[(i + batchIndex * BATCH_SIZE) % templateBank.length];
-    const sentence = truncateSentence(tmpl.t.replace('{w}', '________'), 28);
-    const chinese = tmpl.c.replace('{w}', word);  // 中文翻译用清洗后的纯词
+function stripLite(s) {
+  if (typeof s !== 'string') return '';
+  return s.replace(/[一-鿿㐀-䶿]/g, '').replace(/\s+/g, ' ').trim();
+}
 
-    // 从同批其他词中取干扰项
-    const others = words.filter(w => cleanWordEntry(w) !== word).map(cleanWordEntry).sort(() => Math.random() - 0.5).slice(0, 3);
-    const options = [word, ...others].sort(() => Math.random() - 0.5);
+function posGuess(word) {
+  if (word.includes(' ') || word.includes('-')) return 'phrase';
+  if (/^(be|get|go|take|make|have|do|set|put|bring|fall|grow|look|come|keep|break|spend|save|waste|pay|draw|reach|gain|lose|earn|raise|give|play|meet|solve|achieve|develop|improve|reduce|increase|build|face|accept|reject|create|close|clear|open|pose|do|play)/i.test(word)) return 'v';
+  if (word.length <= 4 && /^[a-z]+$/i.test(word)) return 'adj';
+  return 'n';
+}
+
+/**
+ * 高质量降级方案（AI 不可用时的兜底）：用免费词典 API 实时取每个词（含干扰词）的
+ * 真实英文释义 / 中文翻译 / 例句，生成可用题目。绝不套万能模板、绝不把原词写进释义。
+ * 词典不可达时退化为模板句 + 模板中文（至少中文提示仍在）。
+ */
+async function generateFallback(words, level, batchIndex, pool) {
+  const cleaned = words.map(cleanWordEntry).filter(Boolean);
+  const distractorPool = (pool && pool.length ? pool : words).map(cleanWordEntry).filter(Boolean);
+  // 并行查所有目标词（干扰词在循环内补齐）
+  const looked = await Promise.all(cleaned.map(w => lookupWord(w)));
+  const infoMap = {};
+  cleaned.forEach((w, i) => { infoMap[w.toLowerCase()] = looked[i]; });
+
+  const out = [];
+  for (let i = 0; i < cleaned.length; i++) {
+    const word = cleaned[i];
+    const info = infoMap[word.toLowerCase()] || { pos: '', definition: '', example: '', chinese: '' };
+    const pos = info.pos || posGuess(word);
+
+    // 取 3 个同批干扰词
+    const others = distractorPool.filter(w => w && w !== word).sort(() => Math.random() - 0.5).slice(0, 3);
+    const options = shuffleArray([word, ...others]);
+    // 每个选项配真实释义（含答案词则清空，避免泄露）
+    const optionDefs = options.map(o => {
+      const d = (infoMap[o.toLowerCase()] || {}).definition || '';
+      return (d && !d.toLowerCase().includes(word.toLowerCase())) ? stripLite(d) : '';
+    });
+
+    // 句子：优先用词典真实例句（含目标词→挖空），否则模板句
+    let sentence;
+    if (info.example && info.example.toLowerCase().includes(word.toLowerCase()) && new RegExp(escapeRegExp(word), 'gi').test(info.example)) {
+      sentence = truncateSentence(info.example.replace(new RegExp(escapeRegExp(word), 'gi'), '______'), 28);
+    } else {
+      const tb = FALLBACK_TEMPLATES[pos] || FALLBACK_TEMPLATES.n;
+      sentence = truncateSentence(tb[(i + batchIndex * BATCH_SIZE) % tb.length].t.replace('{w}', '______'), 28);
+    }
+    if (!/_{4,}/.test(sentence)) {
+      const tb = FALLBACK_TEMPLATES[pos] || FALLBACK_TEMPLATES.n;
+      sentence = truncateSentence(tb[(i + batchIndex * BATCH_SIZE) % tb.length].t.replace('{w}', '______'), 28);
+    }
+    sentence = sentence.trim();
+    if (sentence.length > 0) {
+      sentence = sentence[0].toUpperCase() + sentence.slice(1);
+      if (!/[.!?]$/.test(sentence)) sentence += '.';
+    }
 
     const topicCat = TOPIC_CATEGORIES[(i + batchIndex) % TOPIC_CATEGORIES.length];
     const thinkTag = THINKING_TAGS[i % THINKING_TAGS.length];
     const pattern = SENTENCE_PATTERNS[i % SENTENCE_PATTERNS.length];
+    const tmplC = FALLBACK_TEMPLATES[pos] ? FALLBACK_TEMPLATES[pos][(i + batchIndex * BATCH_SIZE) % FALLBACK_TEMPLATES[pos].length].c : '';
 
-    return {
-      word,          // 已清洗的纯英文单词
+    out.push({
+      word,
       pos,
       sentence,
       options,
@@ -593,11 +690,36 @@ function generateFallback(words, level, batchIndex) {
       topic_category: topicCat,
       thinking_tag: thinkTag,
       template: pattern,
-      definition: '',   // 降级方案无英文释义，留空（拼写为听写模式，靠音频+首字母提示，避免泄露原词）
-      option_defs: options.map(() => ''),   // 留空，避免回退到含答案词的释义
-      chinese
-    };
-  });
+      definition: (info.definition && !info.definition.toLowerCase().includes(word.toLowerCase())) ? stripLite(info.definition) : '',
+      option_defs: optionDefs,
+      // 中文优先用真实翻译；缺失时用模板中文（含原词作主语，属正常翻译，非泄露答案）
+      chinese: info.chinese || (tmplC ? tmplC.replace('{w}', word) : word)
+    });
+  }
+  return out;
+}
+
+/**
+ * 校验单道 AI 题目是否合格（不合格则不应入缓存，避免垃圾数据）。
+ * 要求：选项≥2且不重复、释义与选项一一对应且非空非答案词、定义非空非答案词、
+ *       中文翻译非空、句子含挖空且句子内不再残留答案词。
+ */
+function isQuestionValid(q) {
+  if (!q || !q.word) return false;
+  const w = cleanWordEntry(q.word).toLowerCase();
+  const opts = (Array.isArray(q.options) ? q.options : []).map(cleanWordEntry).filter(Boolean);
+  if (opts.length < 2) return false;
+  if (new Set(opts.map(o => o.toLowerCase())).size !== opts.length) return false; // 选项不重复
+  const defs = (Array.isArray(q.option_defs) ? q.option_defs : []).map(s => String(s || '').toLowerCase());
+  if (defs.length !== opts.length) return false;                                 // 释义与选项一一对应
+  if (defs.some(d => !d || d === w)) return false;                              // 释义非空且不是答案词
+  const def = String(q.definition || '').toLowerCase();
+  if (!def || def.includes(w)) return false;                                    // 定义非空且不含答案词
+  if (!q.chinese || !String(q.chinese).trim()) return false;                   // 中文翻译必须有
+  const s = String(q.sentence || '').toLowerCase();
+  if (!/_{4,}/.test(s)) return false;                                           // 句子必须含挖空
+  if (new RegExp('\\b' + escapeRegExp(w) + '\\b', 'i').test(s)) return false;   // 句子残留答案词（未被挖空）
+  return true;
 }
 
 /**
@@ -740,7 +862,8 @@ async function getQuestionsCached(vocabularyList, level) {
       options: Array.isArray(q.options) ? q.options.map(cleanWordEntry) : q.options,
       definition: q.definition ? finalStrip(q.definition) : q.definition,
       option_defs: Array.isArray(q.option_defs) ? q.option_defs.map(finalStrip) : q.option_defs,
-      chinese: q.chinese ? finalStrip(q.chinese) : q.chinese,
+      // chinese 是中文翻译字段，绝不能套用 finalStrip（会删掉所有中文字符）。仅做空白归一。
+      chinese: (typeof q.chinese === 'string' && q.chinese.trim()) ? q.chinese.replace(/\s+/g, ' ').trim() : '',
       topic_category: q.topic_category || '',
     };
     // 定义若包含答案词本身则清空
