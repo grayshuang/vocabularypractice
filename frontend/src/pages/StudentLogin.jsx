@@ -11,6 +11,13 @@ export default function StudentLogin({ onSuccess }) {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
+  // 忘记密码弹窗状态
+  const [showReset, setShowReset] = useState(false);
+  const [rEmail, setREmail] = useState('');
+  const [rPassword, setRPassword] = useState('');
+  const [rMsg, setRMsg] = useState('');
+  const [rLoading, setRLoading] = useState(false);
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
@@ -27,6 +34,22 @@ export default function StudentLogin({ onSuccess }) {
       setError(msg);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleReset(e) {
+    e.preventDefault();
+    setRMsg('');
+    setRLoading(true);
+    try {
+      const res = await api.post('/api/student/reset-password', { email: rEmail, newPassword: rPassword });
+      setRMsg('✅ ' + (res.message || '密码重置成功，请用新密码登录'));
+      setTimeout(() => { setShowReset(false); setRMsg(''); }, 2500);
+    } catch (err) {
+      const msg = err && err.message ? err.message : '重置失败，请重试';
+      setRMsg('⚠️ ' + msg);
+    } finally {
+      setRLoading(false);
     }
   }
 
@@ -47,9 +70,33 @@ export default function StudentLogin({ onSuccess }) {
           还没有账号？<Link to="/register" className="text-indigo-600 hover:text-indigo-800">注册</Link>
         </p>
         <p className="mt-2 text-center text-xs text-gray-400">
+          <button type="button" className="hover:text-indigo-600 underline" onClick={() => setShowReset(true)}>忘记密码？</button>
+          {'  ·  '}
           <Link to="/admin/login" className="hover:text-red-600">管理员入口 →</Link>
         </p>
       </div>
+
+      {showReset && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm">
+            <h3 className="text-lg font-bold text-gray-800 mb-1">重置学生密码</h3>
+            <p className="text-xs text-gray-500 mb-4">输入注册邮箱验证身份后直接设置新密码</p>
+            <form onSubmit={handleReset} className="space-y-3">
+              <input type="email" placeholder="注册邮箱" value={rEmail} onChange={e => setREmail(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" required />
+              <input type="password" placeholder="新密码（至少 4 位）" value={rPassword} onChange={e => setRPassword(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" required />
+              {rMsg && <p className={`text-sm p-2 rounded ${rMsg.startsWith('✅') ? 'text-green-700 bg-green-50' : 'text-red-600 bg-red-50'}`}>{rMsg}</p>}
+              <div className="flex gap-2 pt-1">
+                <button type="submit" disabled={rLoading} className="flex-1 py-2 px-4 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm disabled:opacity-50">
+                  {rLoading ? '处理中...' : '重置密码'}
+                </button>
+                <button type="button" onClick={() => { setShowReset(false); setRMsg(''); }} className="flex-1 py-2 px-4 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 text-sm">
+                  取消
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

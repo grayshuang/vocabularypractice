@@ -97,21 +97,40 @@ app.post('/api/teacher/login', (req, res) => {
   res.json({ token, teacher: { id: teacher.id, name: teacher.name, username: teacher.username } });
 });
 
-// 教师自助重置密码（用注册邮箱验证身份，无需旧密码 / 无需登录）
+// 教师自助重置密码（只用注册邮箱验证，无需用户名 / 旧密码 / 登录）
 app.post('/api/teacher/reset-password', (req, res) => {
-  const { username, email, newPassword } = req.body;
-  if (!username || !email || !newPassword) {
-    return res.status(400).json({ error: '请填写用户名、注册邮箱、新密码' });
+  const { email, newPassword } = req.body;
+  if (!email || !newPassword) {
+    return res.status(400).json({ error: '请填写注册邮箱和新密码' });
   }
   if (String(newPassword).length < 4) {
     return res.status(400).json({ error: '新密码至少 4 位' });
   }
   const db = readDB();
-  const teacher = db.teachers.find(t => t.username === username && t.email === email);
+  const teacher = db.teachers.find(t => t.email === email);
   if (!teacher) {
-    return res.status(404).json({ error: '用户名与邮箱不匹配，无法验证身份（请确认两项都正确）' });
+    return res.status(404).json({ error: '该邮箱未注册教师账号' });
   }
   teacher.password_hash = bcrypt.hashSync(newPassword, 10);
+  writeDB(db);
+  res.json({ message: '密码重置成功，请用新密码登录' });
+});
+
+// 学生自助重置密码（只用注册邮箱验证，无需用户名 / 旧密码 / 登录）
+app.post('/api/student/reset-password', (req, res) => {
+  const { email, newPassword } = req.body;
+  if (!email || !newPassword) {
+    return res.status(400).json({ error: '请填写注册邮箱和新密码' });
+  }
+  if (String(newPassword).length < 4) {
+    return res.status(400).json({ error: '新密码至少 4 位' });
+  }
+  const db = readDB();
+  const student = db.students.find(s => s.email === email);
+  if (!student) {
+    return res.status(404).json({ error: '该邮箱未注册学生账号' });
+  }
+  student.password_hash = bcrypt.hashSync(newPassword, 10);
   writeDB(db);
   res.json({ message: '密码重置成功，请用新密码登录' });
 });
