@@ -1253,6 +1253,7 @@ export default function Practice() {
   const [selectedWord, setSelectedWord] = useState(null);
   const [isCorrect, setIsCorrect] = useState(null);
   const [showHint, setShowHint] = useState(false);
+  const [showSpellingCn, setShowSpellingCn] = useState(false); // 拼写模式：点击显示中文按钮
   const [typed, setTyped] = useState('');
   const [spellChecked, setSpellChecked] = useState(false);
   const [buildOrder, setBuildOrder] = useState(null);
@@ -1573,6 +1574,7 @@ export default function Practice() {
       }
     }
     setShowHint(false);
+    setShowSpellingCn(false);
   }, [currentQuestion?.uid, currentQuestion?.word, results]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── 切换模式标签 ── */
@@ -2454,6 +2456,19 @@ export default function Practice() {
                       🔊 发音
                     </button>
                   </div>
+                  {/* 整句中文提示按钮（点击显示） */}
+                  {!showSpellingCn && (q.sentence_cn || q.chinese) && (
+                    <button onClick={() => setShowSpellingCn(true)}
+                      className="mb-2 text-[11px] text-orange-500 hover:text-orange-700 underline-offset-2 hover:underline">
+                      💡 显示中文（提示会显示完整句子翻译）
+                    </button>
+                  )}
+                  {showSpellingCn && (q.sentence_cn || q.chinese) && (
+                    <div className="mb-2 px-3 py-2 bg-orange-50 border border-orange-200 rounded-lg">
+                      {q.sentence_cn && <p className="text-sm text-orange-800 leading-relaxed font-medium">💬 {cnText(q.sentence_cn)}</p>}
+                      {q.chinese && !q.sentence_cn?.includes(cnText(q.chinese)) && <p className="text-xs text-orange-600 leading-relaxed mt-1">📝 {cnText(q.chinese)}</p>}
+                    </div>
+                  )}
                   {/* 首字母提示 */}
                   <div className="mb-2 px-3 py-1.5 bg-gray-50 rounded-lg border border-gray-100">
                     <span className="text-[10px] text-gray-400 mr-1.5">首字母提示</span>

@@ -474,7 +474,7 @@ const COMMON_DISTRACTORS = [
 
 // 词库缓存版本号：每次修改题目生成质量（如修复模板句/脏数据）后 +1，
 // 旧版本缓存自动失效，下次请求强制重新 AI 生成干净句子，无需手动清库。
-const CACHE_VERSION = 12;
+const CACHE_VERSION = 13;
 
 // 不同目标分数对应的句子复杂度指导（注入到 AI 生成 prompt）
 const LEVEL_GUIDE = {
@@ -827,48 +827,20 @@ async function fetchWordExample(rawWord) {
 }
 
 /** 根据词性生成兜底释义（当词典查不到干扰词定义时使用）。variant 用于同词性产生不同措辞避免重复。 */
-function fallbackDefForPos(pos, variant) {
-  // 注意：绝不把原词嵌入返回值，否则前端 strip 后会变成裸词泄露答案
-  // 改进：每种词性的变体指向不同语义域，确保彼此可区分
-  const v = (variant || 0) % 6;  // 每种词性 6 种变体（增加区分度）
-  switch ((pos || 'n').toLowerCase()) {
-    case 'v': case 'vi': case 'vt':
-      return [
-        'relating to an action or process that changes something',
-        'connected to how people behave or interact in society',
-        'about creating, building, or producing something new',
-        'involving movement, change, or development over time',
-        'describing how something affects or influences a situation',
-        'used when talking about managing or controlling something'
-      ][v];
-    case 'adj':
-      return [
-        'describing a quality or condition of something',
-        'relating to size, amount, or degree of something',
-        'about how important or necessary something is',
-        'connected to appearance, form, or structure',
-        'describing a feeling, attitude, or opinion',
-        'indicating whether something is good or bad'
-      ][v];
-    case 'adv':
-      return [
-        'telling how often or how much something happens',
-        'about the manner or way in which something is done',
-        'relating to time — when something occurs',
-        'describing the level or extent of something',
-        'connected to certainty or possibility',
-        'indicating a point of view or perspective'
-      ][v];
-    case 'n': default:
-      return [
-        'a concept or idea in academic or scientific contexts',
-        'something physical found in nature or daily life',
-        'an abstract principle or rule in social systems',
-        'a measurable quantity in economics or statistics',
-        'part of a system, process, or method',
-        'a role, position, or category in an organization'
-      ][v];
+function fallbackDefForPos(pos, variant, word, infoMap) {
+  // 优先级 1：如果提供了 word 且 infoMap 中有该词的真实 def，优先用真实 def
+  if (word && infoMap) {
+    const info = infoMap[word.toLowerCase()];
+    if (info && info.definition && !isGenericDefinition(info.definition)) {
+      // 真实 def 可能含答案词原文，去掉并 strip
+      const d = info.definition;
+      if (d && !d.toLowerCase().includes(word.toLowerCase())) {
+        return stripLite(d);
+      }
+    }
   }
+  // 优先级 2：诚实占位（绝不返回通用 placeholder，避免学生看到"an abstract principle..."等假释义）
+  return '（暂无释义）';
 }
 
 /** 检测释义是否过于宽泛/通用（无法区分不同词汇） */
@@ -881,6 +853,11 @@ function isGenericDefinition(def) {
     /^(a word used to|a term for|denoting|meaning)/,
     /^(describing|giving|expressing|modifying|indicating) (a |an |something )?(quality|characteristic|attribute|property|feature)/,
     /^(to perform|to carry out|an action|an activity|an act|a deed)/,
+    // 旧 fallbackDefForPos 的 6 语义域占位（兜底被改后这些应不再出现，但拦截旧缓存）
+    /^(relating to|connected to|about|involving|describing|used when)/,
+    /^(a concept or idea|something physical|an abstract principle|a measurable quantity|part of a system|a role,? position)/,
+    /^(telling how|about the manner|relating to time|connected to certainty)/,
+    /^(describing the level|indicating a point of view)/,
   ];
   return GENERIC_PATTERNS.some(p => p.test(d));
 }
@@ -1001,9 +978,9 @@ async function generateFallback(words, level, batchIndex, pool) {
     const optionDefs = options.map((o, oi) => {
       const oKey = o.toLowerCase();
       const d = (infoMap[oKey] || {}).definition || '';
-      if (d && !d.toLowerCase().includes(word.toLowerCase())) return stripLite(d);
-      // 兜底：基于该词的猜测词性 + 选项位置生成差异化占位释义
-      return fallbackDefForPos(posMap[oKey] || 'n', i + oi);
+      if (d && !d.toLowerCase().includes(word.toLowerCase()) && !isGenericDefinition(d)) return stripLite(d);
+      // 兜底：传入该词本身和 infoMap，让 fallbackDefForPos 能查真实定义
+      return fallbackDefForPos(posMap[oKey] || 'n', i + oi, o, infoMap);
     });
 
     // 中文优先级（修正：词级翻译优先，避免模板长句假中文）：
@@ -1031,7 +1008,7 @@ async function generateFallback(words, level, batchIndex, pool) {
     const safeOptionDefs = optionDefs.map((d, di) => {
       const dClean = stripLite(d || '').toLowerCase();
       if (!d || options.some(o => dClean === o.toLowerCase() || dClean.includes(o.toLowerCase())) || isGenericDefinition(d)) {
-        return fallbackDefForPos(pos, i + di + 99);  // 兜底替换，用偏移量避免与上面的重复
+        return fallbackDefForPos(pos, i + di + 99, word, infoMap);  // 兜底替换，传入word+infoMap便于查真实def
       }
       return d;
     });
@@ -1045,7 +1022,7 @@ async function generateFallback(words, level, batchIndex, pool) {
       topic_category: topicCat,
       thinking_tag: thinkTag,
       template: pattern,
-      definition: (info.definition && !info.definition.toLowerCase().includes(word.toLowerCase()) && !isGenericDefinition(info.definition)) ? stripLite(info.definition) : fallbackDefForPos(pos, i + 77),
+      definition: (info.definition && !info.definition.toLowerCase().includes(word.toLowerCase()) && !isGenericDefinition(info.definition)) ? stripLite(info.definition) : fallbackDefForPos(pos, i + 77, word, infoMap),
       option_defs: safeOptionDefs,
       chinese,
       sentence_cn: translations[i] || ''   // 整句中文翻译（独立于词级chinese）
@@ -1061,8 +1038,8 @@ async function generateFallback(words, level, batchIndex, pool) {
       options: shuffleArray([w, 'significant', 'essential', 'crucial'].filter(o => o !== w).slice(0, 3).concat(w)),
       correct_answer: w,
       topic_category: '社会类', thinking_tag: '效率', template: 'It is widely argued that...',
-      definition: fallbackDefForPos(posGuess(w), wi),
-      option_defs: [0,1,2,3].map(vi => fallbackDefForPos(posGuess(w), wi + vi + 10)),
+      definition: fallbackDefForPos(posGuess(w), wi, w, null),
+      option_defs: [0,1,2,3].map(vi => fallbackDefForPos(posGuess(w), wi + vi + 10, null, null)),
       chinese: `（关于 ${w} 的句子翻译待补充）`,
       sentence_cn: ''
     }));
@@ -1208,8 +1185,10 @@ async function getQuestionsCached(vocabularyList, level) {
           correct_answer: q.correct_answer || q.word,
           topic: q.topic || '',
           template: q.template || '',
-          chinese: q.chinese || '',
-          sentence_cn: q.sentence_cn || '',
+          // AI 返回的 chinese 实际是整句翻译；存入 sentence_cn
+          sentence_cn: q.chinese || '',
+          // 词级中文（用于单独显示目标词含义）：从 infoMap 推断
+          chinese: '',
           definition: q.definition || '',
           option_defs: q.option_defs || [],
           topic_category: q.topic_category || ''
@@ -1265,9 +1244,10 @@ async function getQuestionsCached(vocabularyList, level) {
       options: Array.isArray(q.options) ? q.options.map(cleanWordEntry) : q.options,
       definition: q.definition ? finalStrip(q.definition) : q.definition,
       option_defs: Array.isArray(q.option_defs) ? q.option_defs.map(finalStrip) : q.option_defs,
-      // chinese 是中文翻译字段，绝不能套用 finalStrip（会删掉所有中文字符）。仅做空白归一。
-      chinese: (typeof q.chinese === 'string' && q.chinese.trim()) ? q.chinese.replace(/\s+/g, ' ').trim() : '',
-      sentence_cn: (typeof q.sentence_cn === 'string' && q.sentence_cn.trim()) ? q.sentence_cn.replace(/\s+/g, ' ').trim() : '',
+      // AI 的 chinese 字段实际是整句翻译 → 存入 sentence_cn
+      sentence_cn: (typeof q.chinese === 'string' && q.chinese.trim()) ? q.chinese.replace(/\s+/g, ' ').trim() : (typeof q.sentence_cn === 'string' ? q.sentence_cn : ''),
+      // 词级 chinese 留空，前端需要时通过 lookupWord 查
+      chinese: (typeof q.sentence_cn === 'string' && q.sentence_cn.trim()) ? q.sentence_cn.replace(/\s+/g, ' ').trim() : '',
       topic_category: q.topic_category || '',
     };
     // 定义若包含答案词本身则清空
