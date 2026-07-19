@@ -400,7 +400,7 @@ const FALLBACK_TEMPLATES = {
 const BATCH_SIZE = 10;
 // 词库缓存版本号：每次修改题目生成质量（如修复模板句/脏数据）后 +1，
 // 旧版本缓存自动失效，下次请求强制重新 AI 生成干净句子，无需手动清库。
-const CACHE_VERSION = 4;
+const CACHE_VERSION = 5;
 
 // 不同目标分数对应的句子复杂度指导（注入到 AI 生成 prompt）
 const LEVEL_GUIDE = {
@@ -692,8 +692,8 @@ async function generateFallback(words, level, batchIndex, pool) {
       template: pattern,
       definition: (info.definition && !info.definition.toLowerCase().includes(word.toLowerCase())) ? stripLite(info.definition) : '',
       option_defs: optionDefs,
-      // 中文优先用真实翻译；缺失时用模板中文（含原词作主语，属正常翻译，非泄露答案）
-      chinese: info.chinese || (tmplC ? tmplC.replace('{w}', word) : word)
+      // 中文优先用真实翻译；缺失时用模板中文；模板也没有则留空（绝不回退为原词，否则前端提示会泄露答案）
+      chinese: info.chinese || (tmplC ? tmplC.replace('{w}', word) : '（翻译待补充）')
     });
   }
   return out;

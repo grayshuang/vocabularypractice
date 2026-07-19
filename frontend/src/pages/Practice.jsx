@@ -1021,7 +1021,14 @@ function SentenceSearch({ q, initialResult, onCommit, onSolved, distractorPool }
   return (
     <div>
       <p className="text-[11px] text-indigo-500 mb-1">词格找句 · 点单词连成隐藏的句子</p>
-      {q.chinese && <p className="text-xs text-gray-500 mb-2">🔍 提示（中文）：{cnText(q.chinese)}</p>}
+      {(() => {
+        const rawCn = cnText(q.chinese || '');
+        const w = (q.word || '').toLowerCase();
+        const isLeaking = rawCn && rawCn.toLowerCase() === w;
+        return (q.chinese && !isLeaking)
+          ? <p className="text-xs text-gray-500 mb-2">🔍 提示（中文）：{rawCn}</p>
+          : <p className="text-xs text-gray-400 mb-2">🔍 提示（中文）：（暂无中文提示）</p>;
+      })()}
       <div className="relative mb-2">
         {/* SVG 虚线穿针 — 基于实际DOM坐标，不错位 */}
         {showHint && hintCoords && (
@@ -2305,11 +2312,17 @@ export default function Practice() {
                   {/* 提示内容展示 */}
                   {buildHintLevel >= 1 && !buildChecked && (
                     <div className="mb-2 px-3 py-2 rounded-lg bg-blue-50 border border-blue-100 space-y-1">
-                      {buildHintLevel >= 1 && (q.chinese || q.zh) && (
-                        <p className="text-xs text-blue-800">{cnText(q.chinese || q.zh || '')}</p>
-                      )}
+                      {buildHintLevel >= 1 && (() => {
+                        const rawCn = cnText(q.chinese || q.zh || '');
+                        const w = (q.word || '').toLowerCase();
+                        const isLeaking = rawCn && rawCn.toLowerCase() === w;
+                        if ((q.chinese || q.zh) && !isLeaking) return <p className="text-xs text-blue-800">{rawCn}</p>;
+                        return <p className="text-xs text-blue-600">（暂无中文提示）</p>;
+                      })()}
                       {buildHintLevel >= 2 && (
-                        <p className="text-xs text-blue-700 font-mono bg-white rounded px-2 py-1 mt-1">{getFirstHalfSentence(q)}</p>
+                        <p className="text-xs text-blue-700 font-mono bg-white rounded px-2 py-1 mt-1">
+                          答案共 {fullSentence(q).split(/\s+/).length} 词，首字母：{fullSentence(q).split(/\s+/).map(w => w[0]?.toUpperCase() || '').join(' ')}
+                        </p>
                       )}
                       {buildHintLevel >= 3 && (
                         <p className="text-xs text-red-700 font-mono bg-red-50 rounded px-2 py-1 mt-1">完整答案：{fullSentence(q)}</p>
@@ -2412,11 +2425,17 @@ export default function Practice() {
                   {/* 提示内容展示 */}
                   {chunkHintLevel >= 1 && !chunkChecked && (
                     <div className="mb-2 px-3 py-2 rounded-lg bg-blue-50 border border-blue-100 space-y-1">
-                      {chunkHintLevel >= 1 && (q.chinese || q.zh) && (
-                        <p className="text-xs text-blue-800">{cnText(q.chinese || q.zh || '')}</p>
-                      )}
+                      {chunkHintLevel >= 1 && (() => {
+                        const rawCn = cnText(q.chinese || q.zh || '');
+                        const w = (q.word || '').toLowerCase();
+                        const isLeaking = rawCn && rawCn.toLowerCase() === w;
+                        if ((q.chinese || q.zh) && !isLeaking) return <p className="text-xs text-blue-800">{rawCn}</p>;
+                        return <p className="text-xs text-blue-600">（暂无中文提示）</p>;
+                      })()}
                       {chunkHintLevel >= 2 && (
-                        <p className="text-xs text-blue-700 font-mono bg-white rounded px-2 py-1 mt-1">{getFirstHalfSentence(q)}</p>
+                        <p className="text-xs text-blue-700 font-mono bg-white rounded px-2 py-1 mt-1">
+                          每空格词数：{chunkCorrect.filter((_, i) => chunkBlankIndices.includes(i)).map(c => c.split(/\s+/).length).join(' / ')} 词
+                        </p>
                       )}
                       {chunkHintLevel >= 3 && (
                         <p className="text-xs text-red-700 font-mono bg-red-50 rounded px-2 py-1 mt-1">完整答案：{fullSentence(q)}</p>
