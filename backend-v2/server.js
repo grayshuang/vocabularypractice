@@ -2363,15 +2363,25 @@ app.get('/api/teacher/room/:roomId/students', authMiddleware, async (req, res) =
   if (pgRows) pgRows.forEach(r => { if (!sessionMap.has(r.id)) sessionMap.set(r.id, r); });
 
   const allSessions = [...sessionMap.values()];
-  const meaningfulSessions = allSessions.filter(ps =>
-    Number(ps.room_id) === roomId && ps.finished_at && (ps.total_questions || 0) > 0
-  );
+  // 🔑 兼容脏数据：旧版紧急 INSERT 写入 room_id=0，导致正常 room_id 过滤丢失记录。
+  //   对 room_id ≤ 0 的异常记录，只要该学生已正式加入本房间，也视为有效会话。
+  const isJoinedStudent = new Set(joinedIds);
+  const meaningfulSessions = allSessions.filter(ps => {
+    const rid = Number(ps.room_id);
+    const validRoom = rid === roomId;
+    const orphanButKnown = (rid <= 0 || !rid) && isJoinedStudent.has(ps.student_id);
+    return (validRoom || orphanButKnown) && ps.finished_at && (ps.total_questions || 0) > 0;
+  });
   const practiceIds = meaningfulSessions
     .map(ps => ps.student_id)
     .filter(id => !joinedIds.includes(id));
   const studentIds = [...new Set([...joinedIds, ...practiceIds])];
   const students = db.students.filter(s => studentIds.includes(s.id)).map(s => {
-    const sessions = allSessions.filter(ps => ps.student_id === s.id && Number(ps.room_id) === roomId);
+    // 🔑 同样兼容 room_id 异常的脏数据
+    const sessions = allSessions.filter(ps => {
+      const rid = Number(ps.room_id);
+      return ps.student_id === s.id && (rid === roomId || (rid <= 0 || !rid));
+    });
     const finishedSessions = sessions.filter(ps => ps.finished_at);
     const totalQ = sessions.reduce((a, b) => a + (b.total_questions || 0), 0);
     const totalC = sessions.reduce((a, b) => a + (b.correct_count || 0), 0);
@@ -2395,14 +2405,20 @@ app.get('/api/teacher/room/:roomId/student/:studentId/details', authMiddleware, 
   const room = db.rooms.find(r => r.id === roomId);
   const vocabSet = new Set((room?.vocabulary_list || []).map(w => w.toLowerCase()));
 
-  // 🔑 PG 主源 + 内存合并会话
+  // 🔑 PG 主源 + 内存合并会话（兼容 room_id 异常的脏数据）
   const sessionMap = new Map();
   db.practiceSessions
-    .filter(ps => ps.student_id === studentId && Number(ps.room_id) === roomId && ps.finished_at)
-    .forEach(s => sessionMap.set(s.id, s));
+    .filter(ps => ps.student_id === studentId && ps.finished_at)
+    .forEach(s => {
+      const rid = Number(s.room_id);
+      if (rid === roomId || (rid <= 0 || !rid)) sessionMap.set(s.id, s);
+    });
   let pgRows = null;
   try { pgRows = await pgGetRoomSessions(roomId, { onlyFinished: true, studentId }); } catch (e) { console.error('[学生详情] PG会话查询异常', e.message); }
-  if (pgRows) pgRows.forEach(r => { if (!sessionMap.has(r.id)) sessionMap.set(r.id, r); });
+  if (pgRows) pgRows.forEach(r => {
+    // PG 返回的所有该学生在该房间（或异常 room_id）的已完结 session 都纳入
+    if (r.student_id == studentId) sessionMap.set(r.id, r);
+  });
 
   const sessions = [...sessionMap.values()];
   const result = [];
