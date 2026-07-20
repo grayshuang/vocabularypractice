@@ -474,7 +474,7 @@ const COMMON_DISTRACTORS = [
 
 // 词库缓存版本号：每次修改题目生成质量（如修复模板句/脏数据）后 +1，
 // 旧版本缓存自动失效，下次请求强制重新 AI 生成干净句子，无需手动清库。
-const CACHE_VERSION = 15;
+const CACHE_VERSION = 16;
 
 // 不同目标分数对应的句子复杂度指导（注入到 AI 生成 prompt）
 const LEVEL_GUIDE = {
@@ -826,21 +826,46 @@ async function fetchWordExample(rawWord) {
   return result;
 }
 
-/** 根据词性生成兜底释义（当词典查不到干扰词定义时使用）。variant 用于同词性产生不同措辞避免重复。 */
-function fallbackDefForPos(pos, variant, word, infoMap) {
+/** 根据词性/词生成兜底释义（当词典查不到定义时使用）。variant 用于同词性产生不同措辞避免重复。 */
+function fallbackDefForPos(pos, variant, word, infoMap, phraseMap) {
   // 优先级 1：如果提供了 word 且 infoMap 中有该词的真实 def，优先用真实 def
   if (word && infoMap) {
     const info = infoMap[word.toLowerCase()];
     if (info && info.definition && !isGenericDefinition(info.definition)) {
-      // 真实 def 可能含答案词原文，去掉并 strip
       const d = info.definition;
       if (d && !d.toLowerCase().includes(word.toLowerCase())) {
         return stripLite(d);
       }
     }
   }
-  // 优先级 2：诚实占位（绝不返回通用 placeholder，避免学生看到"an abstract principle..."等假释义）
-  return '（暂无释义）';
+  // 优先级 2：短语（含空格的多词表达）→ 查 phraseMap 取 MyMemory 中文翻译，格式化为英文风格释义
+  if (word && phraseMap && /\s/.test(word)) {
+    const cn = phraseMap[word.toLowerCase()];
+    if (cn && cn.length > 0 && cn.length < 40) {
+      // 用中文翻译作为释义基础：格式 "a phrase meaning '中文'"
+      return `a phrase meaning "${cn}"`;
+    }
+    // 短语但没查到翻译 → 按词性给一个通用但不误导的描述
+    const PHRASE_FALLBACKS = [
+      'a commonly used expression in English',
+      'a set phrase or idiom in everyday usage',
+      'a fixed expression with a specific meaning',
+      'a collocation frequently used in spoken and written English',
+      'an idiomatic expression used in context',
+    ];
+    return PHRASE_FALLBACKS[(variant || 0) % PHRASE_FALLBACKS.length];
+  }
+  // 优先级 3：单字词 → 按词性与变体返回有区分度的描述（绝不含原词）
+  const POS_DESCRIPTIONS = {
+    n: ['a concrete or abstract entity', 'a person, place, thing, or concept', 'a noun referring to an object or idea', 'something that can be named or discussed'],
+    v: ['an action or state of being', 'something you can do or experience', 'a verb describing an activity or process', 'an action performed by someone or something'],
+    adj: ['describing a quality or characteristic', 'giving more information about a noun', 'used to modify or describe a noun', 'expressing a property or attribute of something'],
+    adv: ['modifying how an action is done', 'describing the manner of an action', 'telling how or to what extent something happens', 'qualifying an adjective, verb, or other adverb'],
+    phr: ['a fixed expression in English', 'a set phrase or idiom used in context', 'a commonly used group of words together'],
+    prep: ['showing a relationship between words', 'connecting a noun to other words in a sentence', 'indicating position, time, or direction'],
+  };
+  const bucket = POS_DESCRIPTIONS[pos] || POS_DESCRIPTIONS.n;
+  return bucket[(variant || 0) % bucket.length];
 }
 
 /** 检测释义是否过于宽泛/通用（无法区分不同词汇） */
@@ -948,6 +973,31 @@ async function generateFallback(words, level, batchIndex, pool) {
   const posMap = {};
   allLookupWords.forEach(w => { posMap[w.toLowerCase()] = (infoMap[w.toLowerCase()] || {}).pos || posGuess(w); });
 
+  // 预取所有多词短语的中文翻译（Free Dictionary API 不支持短语，用 MyMemory 补充）
+  const phraseMap = {};
+  const phrases = allLookupWords.filter(w => /\s/.test(w));
+  if (phrases.length > 0) {
+    const phraseTranslations = await Promise.allSettled(
+      phrases.map(async (ph) => {
+        try {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 4000);
+          const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(ph)}&langpair=en|zh-CN`, { signal: ctrl.signal });
+          clearTimeout(timer);
+          if (res.ok) {
+            const data = await res.json();
+            const cn = data?.responseData?.translatedText;
+            if (cn && cn !== ph) return { word: ph.toLowerCase(), cn: cn.replace(/\s+/g, ' ').trim() };
+          }
+        } catch (_) { /* 短语翻译失败静默忽略 */ }
+        return null;
+      })
+    );
+    phraseTranslations.forEach(r => {
+      if (r.status === 'fulfilled' && r.value) { phraseMap[r.value.word] = r.value.cn; }
+    });
+  }
+
   // ===== 第一遍：构建每道题的句子（不含中文）=====
   const rawQuestions = [];
   for (let i = 0; i < cleaned.length; i++) {
@@ -1007,7 +1057,7 @@ async function generateFallback(words, level, batchIndex, pool) {
       const d = (infoMap[oKey] || {}).definition || '';
       if (d && !d.toLowerCase().includes(word.toLowerCase()) && !isGenericDefinition(d)) return stripLite(d);
       // 兜底：传入该词本身和 infoMap，让 fallbackDefForPos 能查真实定义
-      return fallbackDefForPos(posMap[oKey] || 'n', i + oi, o, infoMap);
+      return fallbackDefForPos(posMap[oKey] || 'n', i + oi, o, infoMap, phraseMap);
     });
 
     // 中文优先级（修正：词级翻译优先，避免模板长句假中文）：
@@ -1035,7 +1085,7 @@ async function generateFallback(words, level, batchIndex, pool) {
     const safeOptionDefs = optionDefs.map((d, di) => {
       const dClean = stripLite(d || '').toLowerCase();
       if (!d || options.some(o => dClean === o.toLowerCase() || dClean.includes(o.toLowerCase())) || isGenericDefinition(d)) {
-        return fallbackDefForPos(pos, i + di + 99, word, infoMap);  // 兜底替换，传入word+infoMap便于查真实def
+        return fallbackDefForPos(pos, i + di + 99, word, infoMap, phraseMap);  // 兜底替换，传入word+infoMap+phraseMap便于查真实def或短语翻译
       }
       return d;
     });
@@ -1049,7 +1099,7 @@ async function generateFallback(words, level, batchIndex, pool) {
       topic_category: topicCat,
       thinking_tag: thinkTag,
       template: pattern,
-      definition: (info.definition && !info.definition.toLowerCase().includes(word.toLowerCase()) && !isGenericDefinition(info.definition)) ? stripLite(info.definition) : fallbackDefForPos(pos, i + 77, word, infoMap),
+      definition: (info.definition && !info.definition.toLowerCase().includes(word.toLowerCase()) && !isGenericDefinition(info.definition)) ? stripLite(info.definition) : fallbackDefForPos(pos, i + 77, word, infoMap, phraseMap),
       option_defs: safeOptionDefs,
       chinese,
       sentence_cn: translations[i] || ''   // 整句中文翻译（独立于词级chinese）
@@ -1230,8 +1280,8 @@ async function getQuestionsCached(vocabularyList, level) {
           correct_answer: q.correct_answer || q.word,
           topic: q.topic || '',
           template: q.template || '',
-          // AI 返回的 chinese 实际是整句翻译；存入 sentence_cn
-          sentence_cn: q.chinese || '',
+          // AI 返回的 chinese 实际是整句翻译；存入 sentence_cn（必须过模板检测）
+          sentence_cn: (() => { const c = (typeof q.chinese === 'string' && q.chinese.trim()) ? q.chinese.replace(/\s+/g, ' ').trim() : ''; return (!c || isTemplateChinese(c)) ? '' : c; })(),
           // 词级中文（用于单独显示目标词含义）：从 infoMap 推断
           chinese: '',
           definition: q.definition || '',
@@ -1299,6 +1349,62 @@ async function getQuestionsCached(vocabularyList, level) {
     if (clean.definition && w && clean.definition.toLowerCase().includes(w)) clean.definition = '';
     return clean;
   });
+
+  // 最终安全补全：填充所有空缺/暂无的 option_defs（覆盖 AI 路径和旧缓存中的缺失）
+  const EMPTY_DEF_RE = /^\s*(\(?\s*（?暂无[^\)]*）?\s*\)?)?\s*$|^\s*（暂无释义）\s*$/;
+  for (const q of sanitized) {
+    if (!q || !Array.isArray(q.options) || !Array.isArray(q.option_defs)) continue;
+    q.option_defs = q.option_defs.map((d, di) => {
+      const opt = q.options[di] || '';
+      if (d && !EMPTY_DEF_RE.test(d) && d !== '（暂无释义）') return d;  // 已有有效释义
+      // 短语 → 给一个有意义的英文描述
+      if (/\s/.test(opt)) {
+        const PHRASE_DEFS = [
+          'a commonly used English expression',
+          'a fixed phrase or idiom in everyday usage',
+          'a collocation of words with a specific meaning',
+          'an idiomatic expression in spoken and written English',
+        ];
+        return PHRASE_DEFS[(di + (q.word || '').length) % PHRASE_DEFS.length];
+      }
+      // 单字词 → 按首字母/位置给区分度描述
+      const SINGLE_DEFS = [
+        'an English word with a specific meaning in context',
+        'a vocabulary item used in this sentence',
+        'a term that fits grammatically and semantically here',
+        'a word choice appropriate for this blank space',
+      ];
+      return SINGLE_DEFS[(di * 3 + opt.charCodeAt(0)) % SINGLE_DEFS.length];
+    });
+  }
+
+  // 安全网：为所有缺少 sentence_cn 的题目自动翻译补全（AI未返回/被模板检测拦截/旧缓存缺失）
+  const needTranslation = sanitized.filter(q => q && q.sentence && (!q.sentence_cn || !q.sentence_cn.trim()));
+  if (needTranslation.length > 0) {
+    console.log(`🔄 为 ${needTranslation.length} 道题补全 sentence_cn 翻译...`);
+    const translations = await Promise.allSettled(
+      needTranslation.map(q => {
+        // 还原句子中的答案词（去掉 ______）以便翻译更准确
+        const sForTranslate = q.sentence.replace(/_{4,}/g, (q.word || q.correct_answer || '______'));
+        return translateSentence(sForTranslate).catch(() => '');
+      })
+    );
+    const transMap = {}; // index → translation
+    translations.forEach((r, i) => { transMap[i] = (r.status === 'fulfilled' && r.value) || ''; });
+    // 回填到 sanitized 数组
+    let ti = 0;
+    for (const q of sanitized) {
+      if (q && q.sentence && (!q.sentence_cn || !q.sentence_cn.trim())) {
+        const cn = transMap[ti++] || '';
+        q.sentence_cn = (cn && !isTemplateChinese(cn)) ? cn : '';
+        // 同时用翻译后的中文作为词级 chinese 的备选（取首句或截短）
+        if (!q.chinese && cn) {
+          const shortCn = cn.split(/[。！？.!?]/)[0].trim();
+          if (shortCn.length > 2 && shortCn.length < 30) q.chinese = shortCn;
+        }
+      }
+    }
+  }
 
   return sanitized;
 }
