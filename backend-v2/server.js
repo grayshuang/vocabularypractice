@@ -1919,7 +1919,7 @@ app.post('/api/practice/answer', authMiddleware, (req, res) => {
 
 app.post('/api/practice/finish', authMiddleware, async (req, res) => {
   if (req.user.type !== 'student') return res.status(403).json({ error: '无权限' });
-    const { session_id, score, total_questions, correct_count, elapsed_time, pause_count } = req.body;
+    const { session_id, score, total_questions, correct_count, elapsed_time, pause_count, room_code: finishRoomCode, mode_type: finishModeType } = req.body;
 
     // 防护：session_id 为空/NaN 时立即报错，不静默成功
     if (!session_id || session_id === 'null' || session_id === 'undefined') {
@@ -1987,8 +1987,15 @@ app.post('/api/practice/finish', authMiddleware, async (req, res) => {
     // 增量更新会话成绩（绕过全表 TRUNCATE）
     pgDirectUpdateSessionFinish(session).catch(e => console.error('⚠️ 练习结束直写 PG 失败：', e.message));
     } else {
-      // session 仍然找不到（内存和 PG 都没有）→ 记录详细错误
+      // session 仍然找不到（内存和 PG 都没有）→ 紧急写入
+      // 尝试从请求推断 room_id（通过 room_code 查内存 rooms 表）
       console.error(`❌ finish: session id=${sid} 在内存和PG中均不存在! student=${req.user.id}, 已丢弃数据: score=${score}, total=${total_questions}, correct=${correct_count}`);
+      let emergencyRoomId = 0;
+      if (finishRoomCode) {
+        const emergencyRoom = db.rooms.find(r => r.room_code === finishRoomCode);
+        if (emergencyRoom) emergencyRoomId = emergencyRoom.id;
+      }
+      const emergencyModeType = finishModeType || 'unknown';
       // 尝试紧急写入：直接用 SQL INSERT 一个带 finished_at 的 session 记录
       try {
         const { Client } = require('pg');
@@ -1998,7 +2005,7 @@ app.post('/api/practice/finish', authMiddleware, async (req, res) => {
           `INSERT INTO practice_sessions (id, student_id, room_id, mode_type, score, total_questions, correct_count, elapsed_time, pause_count, started_at, finished_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
            ON CONFLICT (id) DO UPDATE SET score=$5, total_questions=$6, correct_count=$7, elapsed_time=$8, pause_count=$9, finished_at=NOW()`,
-          [sid, req.user.id, 0, 'unknown', score, total_questions, correct_count, elapsed_time || 0, pause_count || 0]
+          [sid, req.user.id, emergencyRoomId, emergencyModeType, score, total_questions, correct_count, elapsed_time || 0, pause_count || 0]
         );
         console.log(`✅ finish: 紧急PG写入成功 session id=${sid}`);
         await client.end();
@@ -2171,8 +2178,8 @@ app.get('/api/student/history', authMiddleware, async (req, res) => {
       map.set(r.id, {
         session_id: r.id,
         room_id: r.room_id,
-        room_code: r.room_code || '未知',
-        mode_type: r.mode_type,
+        room_code: r.room_code || '',  // 暂不填"未知"，等下面统一用内存兜底
+        mode_type: r.mode_type || '',
         score: r.score,
         total_questions: r.total_questions,
         correct_count: r.correct_count,
@@ -2182,7 +2189,13 @@ app.get('/api/student/history', authMiddleware, async (req, res) => {
     });
   }
 
-  const history = [...map.values()].sort((a, b) => new Date(b.finished_at) - new Date(a.finished_at));
+  // 🔑 统一兜底：PG 的 rooms JOIN 可能因 id 不一致返回空 room_code，
+  //   且旧数据 mode_type 可能为空；用内存缓存补全缺失字段
+  const history = [...map.values()].map(h => ({
+    ...h,
+    room_code: h.room_code || (db.rooms.find(r => r.id === h.room_id) || {}).room_code || '未知',
+    mode_type: h.mode_type || 'unknown'
+  })).sort((a, b) => new Date(b.finished_at) - new Date(a.finished_at));
   console.log(`[历史诊断] student=${req.user.id}, 内存匹配=${memSessions.length}, PG匹配=${pgRows ? pgRows.length : 'NULL(不可用)'}, 合并返回=${history.length}`);
   res.json(history);
 });

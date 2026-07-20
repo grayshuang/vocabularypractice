@@ -1840,7 +1840,7 @@ export default function Practice() {
     finishedRef.current = true; // 停止计时 + 不再持久化
     try { sessionStorage.removeItem(STORE_KEY); } catch (_) { /* ignore */ }
     try {
-      await api.finishPractice({ session_id: sid, score, total_questions: total, correct_count: cc, elapsed_time: elapsed, pause_count: pc });
+      await api.finishPractice({ session_id: sid, score, total_questions: total, correct_count: cc, elapsed_time: elapsed, pause_count: pc, room_code: roomCode, mode_type: modes.join(',') });
     } catch (err) {
       console.error('结束练习失败', err);
     }
