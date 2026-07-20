@@ -14,7 +14,7 @@ const {
   pgDirectInsertSession, pgDirectUpdateSessionFinish, pgDirectUpdateSessionNote, pgDirectDeleteSession,
   pgDirectInsertAnswer, pgDirectUpsertWordStat, pgDirectInsertProgress,
   pgDirectUpsertWordBank, pgDirectUpsertModeUsage, pgDirectUpdateTeacherStatus,
-  pgDirectGetStudentHistory
+  pgDirectGetStudentHistory, pgGetRoomSessions, pgGetSessionAnswers, pgGetStudentFinishedSessions, pgGetRoomWordStats
 } = require('./database');
 require('dotenv').config();
 
@@ -2071,26 +2071,39 @@ app.get('/api/student/rooms', authMiddleware, (req, res) => {
 
 // ==================== 学生最近一次已完成 session（用于重进恢复） ====================
 
-app.get('/api/student/room/:room_code/session/latest', authMiddleware, (req, res) => {
+app.get('/api/student/room/:room_code/session/latest', authMiddleware, async (req, res) => {
   if (req.user.type !== 'student') return res.status(403).json({ error: '无权限' });
   const { room_code } = req.params;
   const db = readDB();
   const room = db.rooms.find(r => r.room_code === room_code);
   if (!room) return res.status(404).json({ error: '房间不存在' });
-  const finished = db.practiceSessions
+
+  // 🔑 PG 主源 + 内存合并，确保跨实例/重启后也能查到最新已完成会话
+  const sessionMap = new Map();
+  db.practiceSessions
     .filter(s => s.student_id === req.user.id && s.room_id === room.id && s.finished_at)
-    .sort((a, b) => new Date(b.finished_at) - new Date(a.finished_at));
+    .forEach(s => sessionMap.set(s.id, s));
+  let pgRows = null;
+  try { pgRows = await pgGetRoomSessions(room.id, { onlyFinished: true, studentId: req.user.id }); } catch (e) { console.error('[最新会话] PG查询异常', e.message); }
+  if (pgRows) pgRows.forEach(r => { if (!sessionMap.has(r.id)) sessionMap.set(r.id, r); });
+
+  const finished = [...sessionMap.values()].sort((a, b) => new Date(b.finished_at) - new Date(a.finished_at));
   if (finished.length === 0) return res.json({ session: null, answers: [] });
   const latest = finished[0];
-  const answers = db.practiceAnswers
-    .filter(a => a.session_id === latest.id)
-    .map(a => ({
-      uid: a.uid || null,
-      word: a.word,
-      student_answer: a.student_answer,
-      correct_answer: a.correct_answer,
-      is_correct: a.is_correct === 1
-    }));
+
+  // 答案：优先 PG，内存兜底
+  let answers = db.practiceAnswers.filter(a => a.session_id === latest.id);
+  let pgAnswers = null;
+  try { pgAnswers = await pgGetSessionAnswers(latest.id); } catch (e) { console.error('[最新会话] PG答案查询异常', e.message); }
+  if (pgAnswers && pgAnswers.length > 0) answers = pgAnswers;
+
+  const answerList = answers.map(a => ({
+    uid: a.uid || null,
+    word: a.word,
+    student_answer: a.student_answer,
+    correct_answer: a.correct_answer,
+    is_correct: a.is_correct === 1
+  }));
   res.json({
     session: {
       session_id: latest.id,
@@ -2101,7 +2114,7 @@ app.get('/api/student/room/:room_code/session/latest', authMiddleware, (req, res
       elapsed_time: latest.elapsed_time || 0,
       pause_count: latest.pause_count || 0
     },
-    answers
+    answers: answerList
   });
 });
 
@@ -2135,39 +2148,42 @@ app.get('/api/practice/resume', authMiddleware, (req, res) => {
 app.get('/api/student/history', authMiddleware, async (req, res) => {
   if (req.user.type !== 'student') return res.status(403).json({ error: '无权限' });
   const db = readDB();
-  const sessions = db.practiceSessions.filter(s => s.student_id === req.user.id && s.finished_at);
-  const history = sessions.map(s => {
-    const room = db.rooms.find(r => r.id === s.room_id);
-    return {
-      session_id: s.id,
-      room_code: room ? room.room_code : '未知',
-      mode_type: s.mode_type,
-      score: s.score,
-      total_questions: s.total_questions,
-      correct_count: s.correct_count,
-      finished_at: s.finished_at,
-      note: s.note || ''
-    };
-  }).sort((a, b) => new Date(b.finished_at) - new Date(a.finished_at));
+  // 🔑 内存作为快速缓存，PG 作为持久主源；两者合并去重，确保跨实例/重启后不丢记录
+  const memSessions = db.practiceSessions.filter(s => s.student_id === req.user.id && s.finished_at);
+  const map = new Map(); // key: session id
+  memSessions.forEach(s => map.set(s.id, {
+    session_id: s.id,
+    room_id: s.room_id,
+    room_code: (db.rooms.find(r => r.id === s.room_id) || {}).room_code || '未知',
+    mode_type: s.mode_type,
+    score: s.score,
+    total_questions: s.total_questions,
+    correct_count: s.correct_count,
+    finished_at: s.finished_at,
+    note: s.note || ''
+  }));
 
-  // 📊 诊断日志
-  console.log(`[历史诊断] student=${req.user.id}, 内存practiceSessions总数=${db.practiceSessions.length}, 已完结匹配=${sessions.length}, 返回=${history.length}`);
-
-  // 🔁 PG fallback：内存缓存为空时直接查 PG（应对 Railway 重启/缓存不一致）
-  if (history.length === 0) {
-    console.log(`[历史fallback] 内存无记录，尝试PG直查 student=${req.user.id}...`);
-    try {
-      const pgHistory = await pgDirectGetStudentHistory(req.user.id);
-      if (pgHistory.length > 0) {
-        console.log(`[历史fallback] ✅ PG查到 ${pgHistory.length} 条记录，返回PG数据`);
-        return res.json(pgHistory);
-      }
-      console.log(`[历史fallback] PG也无记录`);
-    } catch (e) {
-      console.error(`[历史fallback] PG查询异常：`, e.message);
-    }
+  // 优先用 PG（持久层）补全/覆盖
+  let pgRows = null;
+  try { pgRows = await pgGetStudentFinishedSessions(req.user.id); } catch (e) { console.error('[历史] PG查询异常', e.message); }
+  if (pgRows && pgRows.length > 0) {
+    pgRows.forEach(r => {
+      map.set(r.id, {
+        session_id: r.id,
+        room_id: r.room_id,
+        room_code: r.room_code || '未知',
+        mode_type: r.mode_type,
+        score: r.score,
+        total_questions: r.total_questions,
+        correct_count: r.correct_count,
+        finished_at: r.finished_at,
+        note: r.note || ''
+      });
+    });
   }
 
+  const history = [...map.values()].sort((a, b) => new Date(b.finished_at) - new Date(a.finished_at));
+  console.log(`[历史诊断] student=${req.user.id}, 内存匹配=${memSessions.length}, PG匹配=${pgRows ? pgRows.length : 'NULL(不可用)'}, 合并返回=${history.length}`);
   res.json(history);
 });
 
@@ -2185,17 +2201,23 @@ app.post('/api/student/history/note', authMiddleware, (req, res) => {
   res.json({ message: '备注已保存', note: session.note });
 });
 
-app.post('/api/student/history/delete', authMiddleware, (req, res) => {
+app.post('/api/student/history/delete', authMiddleware, async (req, res) => {
   if (req.user.type !== 'student') return res.status(403).json({ error: '无权限' });
   const { session_id } = req.body;
   if (!session_id) return res.status(400).json({ error: '缺少 session_id' });
   const db = readDB();
-  const idx = db.practiceSessions.findIndex(s => s.id === parseInt(session_id) && s.student_id === req.user.id);
-  if (idx === -1) return res.status(404).json({ error: '记录不存在' });
-  db.practiceSessions.splice(idx, 1);
-  writeDB(db);
-  // 级联删除会话及其答案（增量，绝不全表 TRUNCATE）
-  pgDirectDeleteSession(session_id).catch(e => console.error('⚠️ 历史删除直写 PG 失败：', e.message));
+  const sid = parseInt(session_id);
+  const idx = db.practiceSessions.findIndex(s => s.id === sid && s.student_id === req.user.id);
+  if (idx !== -1) {
+    db.practiceSessions.splice(idx, 1);
+    writeDB(db);
+  }
+  // 级联删除会话及其答案（增量，绝不全表 TRUNCATE）。即便内存无记录，PG 中可能存在（跨实例），仍执行删除。
+  try {
+    await pgDirectDeleteSession(sid);
+  } catch (e) {
+    console.error('⚠️ 历史删除直写 PG 失败：', e.message);
+  }
   res.json({ message: '已删除练习记录' });
 });
 
@@ -2308,15 +2330,27 @@ app.get('/api/student/weak-words', authMiddleware, async (req, res) => {
 
 // ==================== 教师数据查询 ====================
 
-app.get('/api/teacher/room/:roomId/students', authMiddleware, (req, res) => {
+app.get('/api/teacher/room/:roomId/students', authMiddleware, async (req, res) => {
   if (req.user.type !== 'teacher') return res.status(403).json({ error: '无权限' });
   const db = readDB();
   const roomId = parseInt(req.params.roomId);
   // 合并：正式加入的学生 + 有过已完成练习记录但没点加入的学生（去重）
   // 要求练习记录必须 finished_at 且 total_questions > 0，过滤掉"点开即走"的空会话（幽灵学生）
   const joinedIds = db.studentRooms.filter(sr => Number(sr.room_id) === roomId).map(sr => sr.student_id);
-  // 只统计有 finished_at 且至少答了1题的已完成会话
-  const meaningfulSessions = db.practiceSessions.filter(ps =>
+
+  // 🔑 PG 主源 + 内存合并：会话可能在任意实例内存或 PG 中
+  const sessionMap = new Map(); // key: session id → session object
+  // 内存会话
+  db.practiceSessions.forEach(ps => {
+    if (Number(ps.room_id) === roomId) sessionMap.set(ps.id, ps);
+  });
+  // PG 会话补全
+  let pgRows = null;
+  try { pgRows = await pgGetRoomSessions(roomId, { onlyFinished: false }); } catch (e) { console.error('[教师学生列表] PG查询异常', e.message); }
+  if (pgRows) pgRows.forEach(r => { if (!sessionMap.has(r.id)) sessionMap.set(r.id, r); });
+
+  const allSessions = [...sessionMap.values()];
+  const meaningfulSessions = allSessions.filter(ps =>
     Number(ps.room_id) === roomId && ps.finished_at && (ps.total_questions || 0) > 0
   );
   const practiceIds = meaningfulSessions
@@ -2324,7 +2358,7 @@ app.get('/api/teacher/room/:roomId/students', authMiddleware, (req, res) => {
     .filter(id => !joinedIds.includes(id));
   const studentIds = [...new Set([...joinedIds, ...practiceIds])];
   const students = db.students.filter(s => studentIds.includes(s.id)).map(s => {
-    const sessions = db.practiceSessions.filter(ps => ps.student_id === s.id && Number(ps.room_id) === roomId);
+    const sessions = allSessions.filter(ps => ps.student_id === s.id && Number(ps.room_id) === roomId);
     const finishedSessions = sessions.filter(ps => ps.finished_at);
     const totalQ = sessions.reduce((a, b) => a + (b.total_questions || 0), 0);
     const totalC = sessions.reduce((a, b) => a + (b.correct_count || 0), 0);
@@ -2339,7 +2373,7 @@ app.get('/api/teacher/room/:roomId/students', authMiddleware, (req, res) => {
 });
 
 // 获取某学生在房间内的逐题正误详情（用于教师展开查看 / 导出）
-app.get('/api/teacher/room/:roomId/student/:studentId/details', authMiddleware, (req, res) => {
+app.get('/api/teacher/room/:roomId/student/:studentId/details', authMiddleware, async (req, res) => {
   if (req.user.type !== 'teacher') return res.status(403).json({ error: '无权限' });
   const db = readDB();
   const roomId = parseInt(req.params.roomId);
@@ -2347,10 +2381,25 @@ app.get('/api/teacher/room/:roomId/student/:studentId/details', authMiddleware, 
   // 取该房间当前 vocabulary_list 作为白名单，过滤掉不再发布的旧词条
   const room = db.rooms.find(r => r.id === roomId);
   const vocabSet = new Set((room?.vocabulary_list || []).map(w => w.toLowerCase()));
-  const sessions = db.practiceSessions.filter(ps => ps.student_id === studentId && Number(ps.room_id) === roomId && ps.finished_at);
-  const result = sessions.map(s => {
-    const answers = db.practiceAnswers
-      .filter(a => a.session_id === s.id)
+
+  // 🔑 PG 主源 + 内存合并会话
+  const sessionMap = new Map();
+  db.practiceSessions
+    .filter(ps => ps.student_id === studentId && Number(ps.room_id) === roomId && ps.finished_at)
+    .forEach(s => sessionMap.set(s.id, s));
+  let pgRows = null;
+  try { pgRows = await pgGetRoomSessions(roomId, { onlyFinished: true, studentId }); } catch (e) { console.error('[学生详情] PG会话查询异常', e.message); }
+  if (pgRows) pgRows.forEach(r => { if (!sessionMap.has(r.id)) sessionMap.set(r.id, r); });
+
+  const sessions = [...sessionMap.values()];
+  const result = [];
+  for (const s of sessions) {
+    // 答案：优先 PG，内存兜底
+    let answers = db.practiceAnswers.filter(a => a.session_id === s.id);
+    let pgAnswers = null;
+    try { pgAnswers = await pgGetSessionAnswers(s.id); } catch (e) { console.error('[学生详情] PG答案查询异常', e.message); }
+    if (pgAnswers && pgAnswers.length > 0) answers = pgAnswers;
+    const answerList = answers
       .map(a => ({
         word: cleanWordEntry(a.word),
         is_correct: a.is_correct === 1,
@@ -2363,7 +2412,7 @@ app.get('/api/teacher/room/:roomId/student/:studentId/details', authMiddleware, 
         const w = (a.word || '').toLowerCase();
         return !w || vocabSet.has(w);
       });
-    return {
+    result.push({
       session_id: s.id,
       finished_at: s.finished_at,
       score: s.score,
@@ -2372,13 +2421,14 @@ app.get('/api/teacher/room/:roomId/student/:studentId/details', authMiddleware, 
       elapsed_time: s.elapsed_time || 0,
       pause_count: s.pause_count || 0,
       accuracy: s.total_questions ? Math.round((s.correct_count / s.total_questions) * 100) : 0,
-      answers
-    };
-  }).sort((a, b) => new Date(a.finished_at) - new Date(b.finished_at));
+      answers: answerList
+    });
+  }
+  result.sort((a, b) => new Date(a.finished_at) - new Date(b.finished_at));
   res.json(result);
 });
 
-app.get('/api/teacher/room/:roomId/word-stats', authMiddleware, (req, res) => {
+app.get('/api/teacher/room/:roomId/word-stats', authMiddleware, async (req, res) => {
   if (req.user.type !== 'teacher') return res.status(403).json({ error: '无权限' });
   const db = readDB();
   const roomId = parseInt(req.params.roomId);
@@ -2387,11 +2437,20 @@ app.get('/api/teacher/room/:roomId/word-stats', authMiddleware, (req, res) => {
   if (!room || room.teacher_id !== req.user.id) return res.status(403).json({ error: '无权限' });
   // 取该房间当前 vocabulary_list 作为白名单，过滤掉不再发布的旧词
   const vocabSet = new Set((room.vocabulary_list || []).map(w => w.toLowerCase()));
-  res.json(db.wordStats
-    .filter(ws => Number(ws.room_id) === roomId)
+
+  // 🔑 PG 主源 + 内存合并（按 student_id+room_id+word 去重，内存覆盖 PG 以保留最新）
+  const statMap = new Map();
+  const keyOf = (ws) => `${ws.student_id}:${ws.room_id}:${String(ws.word || '').toLowerCase()}`;
+  (db.wordStats || []).filter(ws => Number(ws.room_id) === roomId).forEach(ws => statMap.set(keyOf(ws), ws));
+  let pgStats = null;
+  try { pgStats = await pgGetRoomWordStats(roomId); } catch (e) { console.error('[词统计] PG查询异常', e.message); }
+  if (pgStats) pgStats.forEach(ws => { if (!statMap.has(keyOf(ws))) statMap.set(keyOf(ws), ws); });
+
+  const result = [...statMap.values()]
     .map(w => ({ ...w, word: cleanWordEntry(w.word) }))
     .filter(w => !w.word || vocabSet.has(w.word.toLowerCase()))
-    .sort((a, b) => b.error_rate - a.error_rate));
+    .sort((a, b) => b.error_rate - a.error_rate);
+  res.json(result);
 });
 
 // ==================== 管理员功能 ====================

@@ -567,9 +567,13 @@ async function pgDirectUpdateSessionFinish(session) {
   if (!pool) throw new Error('PG 未初始化');
   const client = await pool.connect();
   try {
+    // ⚠️ 用 UPSERT 而非纯 UPDATE：避免 startPractice 的 INSERT（fire-and-forget）尚未完成时，
+    // 本 UPDATE 因 WHERE id 找不到行而静默丢弃 finished_at，导致历史查询（过滤 finished_at）漏掉该记录。
     await client.query(
-      `UPDATE practice_sessions SET score=$1, total_questions=$2, correct_count=$3, elapsed_time=$4, pause_count=$5, finished_at=$6 WHERE id=$7`,
-      [session.score, session.total_questions, session.correct_count, session.elapsed_time, session.pause_count, session.finished_at, session.id]
+      `INSERT INTO practice_sessions (id, student_id, room_id, mode_type, score, total_questions, correct_count, elapsed_time, pause_count, started_at, finished_at, note)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT (id) DO UPDATE SET score=EXCLUDED.score, total_questions=EXCLUDED.total_questions, correct_count=EXCLUDED.correct_count, elapsed_time=EXCLUDED.elapsed_time, pause_count=EXCLUDED.pause_count, finished_at=EXCLUDED.finished_at`,
+      [session.id, session.student_id, session.room_id, session.mode_type, session.score, session.total_questions, session.correct_count, session.elapsed_time, session.pause_count, session.started_at, session.finished_at, session.note || '']
     );
   } finally { client.release(); }
 }
@@ -717,6 +721,62 @@ async function pgDirectGetStudentHistory(studentId) {
 
 // ==================== 统一对外接口（与原 API 完全兼容）====================
 
+/** 直查某房间的练习会话（支持仅已完结 / 指定学生）。返回 null 表示 PG 不可用。 */
+async function pgGetRoomSessions(roomId, { onlyFinished = true, studentId = null } = {}) {
+  if (!pool) return null;
+  try {
+    const conds = ['ps.room_id = $1'];
+    const params = [roomId];
+    if (onlyFinished) conds.push('ps.finished_at IS NOT NULL');
+    if (studentId) { params.push(studentId); conds.push(`ps.student_id = $${params.length}`); }
+    const rows = await pgQuery(
+      `SELECT ps.*, r.room_code FROM practice_sessions ps LEFT JOIN rooms r ON r.id = ps.room_id WHERE ${conds.join(' AND ')} ORDER BY ps.finished_at DESC NULLS LAST, ps.id DESC`,
+      params
+    );
+    return rows;
+  } catch (e) {
+    console.error('⚠️ PG 直查房间会话失败：', e.message);
+    return null;
+  }
+}
+
+/** 直查某会话的全部答案。返回 null 表示 PG 不可用。 */
+async function pgGetSessionAnswers(sessionId) {
+  if (!pool) return null;
+  try {
+    return await pgQuery('SELECT * FROM practice_answers WHERE session_id = $1 ORDER BY id ASC', [sessionId]);
+  } catch (e) {
+    console.error('⚠️ PG 直查会话答案失败：', e.message);
+    return null;
+  }
+}
+
+/** 直查某学生的全部已完成会话（含房间号）。返回 [] 表示无数据，返回 null 表示 PG 不可用。 */
+async function pgGetStudentFinishedSessions(studentId) {
+  if (!pool) return null;
+  try {
+    const rows = await pgQuery(
+      `SELECT ps.*, r.room_code FROM practice_sessions ps LEFT JOIN rooms r ON r.id = ps.room_id WHERE ps.student_id = $1 AND ps.finished_at IS NOT NULL ORDER BY ps.finished_at DESC, ps.id DESC`,
+      [studentId]
+    );
+    return rows;
+  } catch (e) {
+    console.error('⚠️ PG 直查学生会话失败：', e.message);
+    return null;
+  }
+}
+
+/** 直查某房间的词统计。返回 null 表示 PG 不可用。 */
+async function pgGetRoomWordStats(roomId) {
+  if (!pool) return null;
+  try {
+    return await pgQuery('SELECT * FROM word_stats WHERE room_id = $1', [roomId]);
+  } catch (e) {
+    console.error('⚠️ PG 直查词统计失败：', e.message);
+    return null;
+  }
+}
+
 function readDB() {
   // 同步读取（兼容现有代码），PG 模式下只返回 PG 缓存
   if (pgReady) {
@@ -817,4 +877,4 @@ async function initDB() {
   }
 }
 
-module.exports = { readDB, readDBAsync, writeDB, genId, initDB, flushDB, pgDirectUpsertStudent, pgDirectUpsertTeacher, pgDirectUpdateTeacherPassword, pgDirectUpdateStudentPassword, pgDirectInsertStudentRoom, pgDirectUpsertRoom, pgDirectDeleteRoomCascade, pgDirectUpdateStudentRoomNote, pgDirectDeleteStudentRoom, pgDirectInsertSession, pgDirectUpdateSessionFinish, pgDirectUpdateSessionNote, pgDirectDeleteSession, pgDirectInsertAnswer, pgDirectUpsertWordStat, pgDirectInsertProgress, pgDirectUpsertWordBank, pgDirectUpsertModeUsage, pgDirectUpdateTeacherStatus, pgDirectGetStudentHistory, isPG: () => pgReady };
+module.exports = { readDB, readDBAsync, writeDB, genId, initDB, flushDB, pgDirectUpsertStudent, pgDirectUpsertTeacher, pgDirectUpdateTeacherPassword, pgDirectUpdateStudentPassword, pgDirectInsertStudentRoom, pgDirectUpsertRoom, pgDirectDeleteRoomCascade, pgDirectUpdateStudentRoomNote, pgDirectDeleteStudentRoom, pgDirectInsertSession, pgDirectUpdateSessionFinish, pgDirectUpdateSessionNote, pgDirectDeleteSession, pgDirectInsertAnswer, pgDirectUpsertWordStat, pgDirectInsertProgress, pgDirectUpsertWordBank, pgDirectUpsertModeUsage, pgDirectUpdateTeacherStatus, pgDirectGetStudentHistory, pgGetRoomSessions, pgGetSessionAnswers, pgGetStudentFinishedSessions, pgGetRoomWordStats, isPG: () => pgReady };
