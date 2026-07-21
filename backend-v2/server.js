@@ -474,7 +474,7 @@ const COMMON_DISTRACTORS = [
 
 // 词库缓存版本号：每次修改题目生成质量（如修复模板句/脏数据）后 +1，
 // 旧版本缓存自动失效，下次请求强制重新 AI 生成干净句子，无需手动清库。
-const CACHE_VERSION = 16;
+const CACHE_VERSION = 17;
 
 // 不同目标分数对应的句子复杂度指导（注入到 AI 生成 prompt）
 const LEVEL_GUIDE = {
@@ -886,7 +886,7 @@ function fallbackDefForPos(pos, variant, word, infoMap, phraseMap) {
       // 用中文翻译作为释义基础：格式 "a phrase meaning '中文'"
       return `a phrase meaning "${cn}"`;
     }
-    // 短语但没查到翻译 → 按词性给一个通用但不误导的描述
+    // 短语但没查到翻译 → 按词性给一个通用但不误导的描述（绝不可出现 a phrase meaning "" 空值）
     const PHRASE_FALLBACKS = [
       'a commonly used expression in English',
       'a set phrase or idiom in everyday usage',
@@ -924,6 +924,9 @@ function isGenericDefinition(def) {
     /^(a concept or idea|something physical|an abstract principle|a measurable quantity|part of a system|a role,? position)/,
     /^(telling how|about the manner|relating to time|connected to certainty)/,
     /^(describing the level|indicating a point of view)/,
+    // "a phrase meaning ''" 空值脏数据（fallbackDefForPos phraseMap 翻译为空时的产物）
+    /^a phrase meaning\s*["']?\s*["']?\s*$/,
+    /^(a commonly used |a fixed phrase |a collocation of |an idiomatic expression )/,
   ];
   return GENERIC_PATTERNS.some(p => p.test(d));
 }
@@ -1392,6 +1395,22 @@ async function getQuestionsCached(vocabularyList, level) {
     if (clean.definition && w && clean.definition.toLowerCase().includes(w)) clean.definition = '';
     return clean;
   });
+
+  // 脏数据拦截：sentence / definition 绝不可出现 "a phrase meaning ''" 等无效兜底文本
+  const DIRTY_SENTENCE_RE = /^a phrase meaning\s*["']?\s*["']?\s*\.?$/i;
+  for (const q of sanitized) {
+    if (!q) continue;
+    // sentence 被错误地写成了定义类文本 → 标记为需后续修复
+    if (q.sentence && DIRTY_SENTENCE_RE.test(q.sentence.trim())) {
+      console.warn(`⚠️ 拦截脏数据 sentence [${q.word}]: "${q.sentence}" → 将用模板句替换`);
+      q.sentence = `The use of ${q.word || 'this term'} is common in many contexts.`.replace(q.word || 'this term', '______');
+    }
+    // definition 含空值短语模板 → 清空让后续安全网补全
+    if (q.definition && DIRTY_SENTENCE_RE.test(q.definition.trim())) {
+      console.warn(`⚠️ 拦截脏数据 definition [${q.word}]: "${q.definition}"`);
+      q.definition = '';
+    }
+  }
 
   // 最终安全补全：填充所有空缺/暂无的 option_defs（覆盖 AI 路径和旧缓存中的缺失）
   const EMPTY_DEF_RE = /^\s*(\(?\s*（?暂无[^\)]*）?\s*\)?)?\s*$|^\s*（暂无释义）\s*$/;
