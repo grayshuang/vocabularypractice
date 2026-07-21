@@ -722,27 +722,40 @@ async function lookupWord(rawWord) {
 }
 
 // 轻量音标查询：仅取 dictionaryapi.dev 的音标，带 module 级缓存与超时保护
-// （供拼写/听写模式显示「提示」按钮的音标；短语/多词返回空）
+// （供拼写/听写模式显示「提示」按钮的音标；短语（含空格）返回空）
+// 连字符词回退：整词查不到时取第一有效段查询（如 like-minded → 先查 like-minded，失败则查 like）
 const _phoneticCache = new Map();
 async function fetchPhonetic(rawWord) {
   const w = cleanWordEntry(rawWord);
   if (!w) return '';
   if (_phoneticCache.has(w)) return _phoneticCache.get(w);
-  try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 4000);
-    const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(w)}`, { signal: ctrl.signal });
-    clearTimeout(timer);
-    if (!res.ok) { _phoneticCache.set(w, ''); return ''; }
-    const data = await res.json();
-    const first = Array.isArray(data) ? data[0] : data;
-    const ph = first ? (first.phonetic || (first.phonetics && first.phonetics.find(p => p && p.text)?.text) || '') : '';
-    _phoneticCache.set(w, ph);
-    return ph;
-  } catch (_) {
-    _phoneticCache.set(w, '');
-    return '';
+  const tryLookup = async (query) => {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 4000);
+      const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(query)}`, { signal: ctrl.signal });
+      clearTimeout(timer);
+      if (!res.ok) return '';
+      const data = await res.json();
+      const first = Array.isArray(data) ? data[0] : data;
+      return first ? (first.phonetic || (first.phonetics && first.phonetics.find(p => p && p.text)?.text) || '') : '';
+    } catch (_) {
+      return '';
+    }
+  };
+  // 1）先尝试完整单词
+  let ph = await tryLookup(w);
+  if (ph) { _phoneticCache.set(w, ph); return ph; }
+  // 2）连字符词回退：取第一段长度≥3的部分查音标
+  if (w.includes('-')) {
+    const segments = w.split('-').filter(s => s.length >= 3);
+    for (const seg of segments) {
+      ph = await tryLookup(seg);
+      if (ph) { _phoneticCache.set(w, ph); return ph; }
+    }
   }
+  _phoneticCache.set(w, '');
+  return '';
 }
 
 function stripLite(s) {

@@ -151,6 +151,7 @@ function isSpellingAcceptable(input, target) {
 }
 
 // 生成首字母提示占位符：如 "paranoid" → "p______d"，"look forward to" → "l_ f_____ t_"
+// 连字符词拆段处理："like-minded" → "l___-m_____"（保留连字符，每子段独立首字母提示）
 function firstLetterHint(word) {
   if (!word) return '';
   // 先清洗掉中文和词性，只保留纯英文单词
@@ -162,6 +163,14 @@ function firstLetterHint(word) {
     if (en.length <= 1) return '';   // 单字符或空→不显示
     // 额外安全网：如果片段本身像词性标注（adj/adv/v/n等），跳过
     if (/^(?:adj|adv|v|n|prep|conj|pron|det|vi|vt|int|aux|phr|abbr)$/i.test(en)) return '';
+    // 按连字符拆分，每子段独立做首字母提示，保留连字符
+    if (en.includes('-')) {
+      return en.split('-').map(seg => {
+        if (seg.length === 0) return '-';
+        if (seg.length === 1) return seg;
+        return seg[0] + '_'.repeat(seg.length - 1);
+      }).join('-');
+    }
     return en[0] + '_'.repeat(en.length - 1);
   }).filter(Boolean).join(' ') || '(空，靠句子+首字母提示推断)';
 }
