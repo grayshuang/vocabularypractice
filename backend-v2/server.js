@@ -528,6 +528,7 @@ ${levelBlock}
 - definition: **纯英文**简单短释义（5-10个单词，禁止包含任何中文字符，**且绝对禁止包含 word 字段的单词本身**——例如 word 是 "dense" 时，definition 不能出现 "dense" 这个词）
 - option_defs: 与 options 顺序严格对应的每个词的**纯英文**简单短释义数组（长度必须等于 options 长度）；第1个是正确答案释义，其余是干扰项释义；**绝对禁止包含任何中文字符**
 - chinese: 中文翻译
+- phonetic: 该词的英文音标（IPA 格式，如 "/dɛns/" 或 "/ɪmˈplɪmənt/"），仅纯英文单词可填，短语填空字符串
 
 【词汇列表】
 ${JSON.stringify(wordBatch)}
@@ -545,7 +546,8 @@ ${JSON.stringify(wordBatch)}
     "template": "While it's universally believed that..., I'd rather say...",
     "definition": "present or found everywhere",
     "option_defs": ["present or found everywhere", "no longer produced or used", "unnecessary, superfluous", "rare, insufficient"],
-    "chinese": "智能手机在现代社会已经变得无处不在，几乎出现在我们日常生活的方方面面。"
+    "chinese": "智能手机在现代社会已经变得无处不在，几乎出现在我们日常生活的方方面面。",
+    "phonetic": "/juːˈbɪkwɪtəs/"
   }
 ]
 
@@ -678,8 +680,8 @@ ${JSON.stringify(wordBatch)}
  */
 async function lookupWord(rawWord) {
   const word = cleanWordEntry(rawWord);
-  if (!word) return { word, pos: '', definition: '', example: '', chinese: '' };
-  let pos = '', definition = '', example = '', chinese = '';
+  if (!word) return { word, pos: '', definition: '', example: '', chinese: '', phonetic: '' };
+  let pos = '', definition = '', example = '', chinese = '', phonetic = '';
   // 1) 英文释义 + 例句 + 词性
   try {
     const ctrl = new AbortController();
@@ -691,6 +693,8 @@ async function lookupWord(rawWord) {
       const first = Array.isArray(data) ? data[0] : data;
       if (first && first.meanings && first.meanings.length) {
         pos = first.meanings[0].partOfSpeech || '';
+        // 音标：优先顶层 phonetic，否则取 phonetics 中第一个带 text 的项
+        phonetic = first.phonetic || (first.phonetics && first.phonetics.find(p => p && p.text)?.text) || '';
         for (const m of first.meanings.slice(0, 3)) {
           const d = m.definitions && m.definitions[0];
           if (d && d.definition && !definition) definition = d.definition;
@@ -714,7 +718,31 @@ async function lookupWord(rawWord) {
       }
     }
   } catch (_) { /* 中文源不可达 */ }
-  return { word, pos, definition: definition || '', example, chinese };
+  return { word, pos, definition: definition || '', example, chinese, phonetic };
+}
+
+// 轻量音标查询：仅取 dictionaryapi.dev 的音标，带 module 级缓存与超时保护
+// （供拼写/听写模式显示「提示」按钮的音标；短语/多词返回空）
+const _phoneticCache = new Map();
+async function fetchPhonetic(rawWord) {
+  const w = cleanWordEntry(rawWord);
+  if (!w) return '';
+  if (_phoneticCache.has(w)) return _phoneticCache.get(w);
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(w)}`, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (!res.ok) { _phoneticCache.set(w, ''); return ''; }
+    const data = await res.json();
+    const first = Array.isArray(data) ? data[0] : data;
+    const ph = first ? (first.phonetic || (first.phonetics && first.phonetics.find(p => p && p.text)?.text) || '') : '';
+    _phoneticCache.set(w, ph);
+    return ph;
+  } catch (_) {
+    _phoneticCache.set(w, '');
+    return '';
+  }
 }
 
 function stripLite(s) {
@@ -1102,7 +1130,8 @@ async function generateFallback(words, level, batchIndex, pool) {
       definition: (info.definition && !info.definition.toLowerCase().includes(word.toLowerCase()) && !isGenericDefinition(info.definition)) ? stripLite(info.definition) : fallbackDefForPos(pos, i + 77, word, infoMap, phraseMap),
       option_defs: safeOptionDefs,
       chinese,
-      sentence_cn: translations[i] || ''   // 整句中文翻译（独立于词级chinese）
+      sentence_cn: translations[i] || '',   // 整句中文翻译（独立于词级chinese）
+      phonetic: ((infoMap[word.toLowerCase()] || {}).phonetic || '') || ''   // 音标（Free Dictionary 提供，短语通常为空）
     });
   }
   return out;
@@ -1286,7 +1315,8 @@ async function getQuestionsCached(vocabularyList, level) {
           chinese: '',
           definition: q.definition || '',
           option_defs: q.option_defs || [],
-          topic_category: q.topic_category || ''
+          topic_category: q.topic_category || '',
+          phonetic: q.phonetic || ''
         };
         bank.push(entry);
         newEntries.push(entry);
@@ -1404,6 +1434,41 @@ async function getQuestionsCached(vocabularyList, level) {
         }
       }
     }
+  }
+
+  // 安全网：为所有缺少 phonetic 的纯英文单词补全音标（用于拼写/听写模式「提示」按钮）
+  // 纯英文单词判定：无空格、仅含字母/撇号/连字符/点；短语（含空格）Free Dictionary 不支持，留空
+  const needPhonetic = sanitized.filter(q => q && !q.phonetic && q.word && !/[\s]/.test(q.word) && !/[^a-zA-Z'’.\-]/.test(q.word));
+  if (needPhonetic.length > 0) {
+    console.log(`🔤 为 ${needPhonetic.length} 个单词补全音标...`);
+    const phMap = {}; // 小写词 → phonetic
+    await Promise.allSettled(
+      [...new Set(needPhonetic.map(q => q.word.toLowerCase()))].map(async (w) => {
+        const ph = await fetchPhonetic(w).catch(() => '');
+        if (ph) phMap[w] = ph;
+      })
+    );
+    // 回填到返回数组
+    for (const q of sanitized) {
+      if (q && !q.phonetic && q.word) {
+        const ph = phMap[q.word.toLowerCase()];
+        if (ph) q.phonetic = ph;
+      }
+    }
+    // 写回 wordBank entry 并持久化（fire-and-forget，不阻塞主响应；下次直接从缓存取）
+    try {
+      const dirty = new Set(Object.keys(phMap).map(k => k.toLowerCase()));
+      bank.forEach(b => {
+        const k = (b.word || '').toLowerCase();
+        if (dirty.has(k) && phMap[k]) b.phonetic = phMap[k];
+      });
+      db.wordBank = bank;
+      writeDB(db);
+      bank.forEach(b => {
+        const k = (b.word || '').toLowerCase();
+        if (dirty.has(k) && phMap[k]) pgDirectUpsertWordBank(b).catch(() => {});
+      });
+    } catch (_) { /* 写回失败不影响本次响应 */ }
   }
 
   return sanitized;

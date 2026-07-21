@@ -1254,6 +1254,7 @@ export default function Practice() {
   const [isCorrect, setIsCorrect] = useState(null);
   const [showHint, setShowHint] = useState(false);
   const [showSpellingCn, setShowSpellingCn] = useState(false); // 拼写模式：点击显示中文按钮
+  const [showPhonetic, setShowPhonetic] = useState(false); // 拼写模式：点击显示音标提示
   const [typed, setTyped] = useState('');
   const [spellChecked, setSpellChecked] = useState(false);
   const [buildOrder, setBuildOrder] = useState(null);
@@ -1575,6 +1576,7 @@ export default function Practice() {
     }
     setShowHint(false);
     setShowSpellingCn(false);
+    setShowPhonetic(false);
   }, [currentQuestion?.uid, currentQuestion?.word, results]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── 切换模式标签 ── */
@@ -2471,6 +2473,19 @@ export default function Practice() {
                       🔊 发音
                     </button>
                   </div>
+                  {/* 音标提示按钮（点击显示音标，作为不稳定TTS发音的可靠补充） */}
+                  {!showPhonetic && q.phonetic && (
+                    <button onClick={() => setShowPhonetic(true)}
+                      className="mb-2 text-[11px] text-sky-500 hover:text-sky-700 underline-offset-2 hover:underline">
+                      💡 显示音标（点击查看发音提示）
+                    </button>
+                  )}
+                  {showPhonetic && q.phonetic && (
+                    <div className="mb-2 px-3 py-2 bg-sky-50 border border-sky-200 rounded-lg flex items-center gap-2">
+                      <span className="text-[10px] text-sky-400 shrink-0">音标</span>
+                      <span className="font-mono text-sm text-sky-700 tracking-wide">{q.phonetic}</span>
+                    </div>
+                  )}
                   {/* 整句中文提示按钮（点击显示） */}
                   {!showSpellingCn && (q.sentence_cn || q.chinese) && (
                     <button onClick={() => setShowSpellingCn(true)}

@@ -165,12 +165,14 @@ async function ensureTables() {
       definition TEXT,
       option_defs JSONB,
       topic_category TEXT,
+      phonetic TEXT,
       UNIQUE(word, level)
     )
   `);
   // 兼容旧库（无 sentence_cn / cache_version 列）：补建列
   await pgQuery(`ALTER TABLE word_bank ADD COLUMN IF NOT EXISTS sentence_cn TEXT`);
   await pgQuery(`ALTER TABLE word_bank ADD COLUMN IF NOT EXISTS cache_version INTEGER DEFAULT 0`);
+  await pgQuery(`ALTER TABLE word_bank ADD COLUMN IF NOT EXISTS phonetic TEXT`);
   await pgQuery(`
     CREATE TABLE IF NOT EXISTS student_progress (
       id SERIAL PRIMARY KEY,
@@ -208,7 +210,7 @@ function rowToStudentRoom(r) { return { id: r.id, student_id: r.student_id, room
 function rowToSession(r) { return { id: r.id, student_id: r.student_id, room_id: r.room_id, mode_type: r.mode_type, score: r.score, total_questions: r.total_questions, correct_count: r.correct_count, elapsed_time: r.elapsed_time, pause_count: r.pause_count, started_at: r.started_at, finished_at: r.finished_at, note: r.note }; }
 function rowToAnswer(r) { return { id: r.id, session_id: r.session_id, question: r.question, student_answer: r.student_answer, correct_answer: r.correct_answer, word: r.word, uid: r.uid, is_correct: r.is_correct, answered_at: r.answered_at }; }
 function rowToWordStat(r) { return { id: r.id, student_id: r.student_id, room_id: r.room_id, word: r.word, pos: r.pos, error_count: r.error_count, total_attempts: r.total_attempts, error_rate: r.error_rate, updated_at: r.updated_at }; }
-function rowToWordBank(r) { return { id: r.id, word: r.word, level: r.level, pos: r.pos, sentence: r.sentence, options: r.options, correct_answer: r.correct_answer, topic: r.topic, template: r.template, chinese: r.chinese, sentence_cn: r.sentence_cn, cache_version: r.cache_version || 0, definition: r.definition, option_defs: r.option_defs, topic_category: r.topic_category }; }
+function rowToWordBank(r) { return { id: r.id, word: r.word, level: r.level, pos: r.pos, sentence: r.sentence, options: r.options, correct_answer: r.correct_answer, topic: r.topic, template: r.template, chinese: r.chinese, sentence_cn: r.sentence_cn, cache_version: r.cache_version || 0, definition: r.definition, option_defs: r.option_defs, topic_category: r.topic_category, phonetic: r.phonetic || '' }; }
 function rowToProgress(r) { return { id: r.id, student_id: r.student_id, room_id: r.room_id, word: r.word, mode: r.mode, is_correct: r.is_correct, answered_at: r.answered_at }; }
 
 /**
@@ -651,15 +653,16 @@ async function pgDirectUpsertWordBank(entry) {
   const client = await pool.connect();
   try {
     await client.query(
-      `INSERT INTO word_bank (id, word, level, pos, sentence, options, correct_answer, topic, template, chinese, sentence_cn, cache_version, definition, option_defs, topic_category)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15)
+      `INSERT INTO word_bank (id, word, level, pos, sentence, options, correct_answer, topic, template, chinese, sentence_cn, cache_version, definition, option_defs, topic_category, phonetic)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16)
        ON CONFLICT (word, level) DO UPDATE SET
          pos=EXCLUDED.pos, sentence=EXCLUDED.sentence, options=EXCLUDED.options, correct_answer=EXCLUDED.correct_answer,
          topic=EXCLUDED.topic, template=EXCLUDED.template, chinese=EXCLUDED.chinese, sentence_cn=EXCLUDED.sentence_cn,
          cache_version=EXCLUDED.cache_version,
-         definition=EXCLUDED.definition, option_defs=EXCLUDED.option_defs, topic_category=EXCLUDED.topic_category
+         definition=EXCLUDED.definition, option_defs=EXCLUDED.option_defs, topic_category=EXCLUDED.topic_category,
+         phonetic=EXCLUDED.phonetic
        RETURNING id`,
-      [entry.id, entry.word, entry.level, entry.pos, entry.sentence, JSON.stringify(entry.options || []), entry.correct_answer, entry.topic, entry.template, entry.chinese || '', entry.sentence_cn || '', entry.cache_version || 0, entry.definition || '', JSON.stringify(entry.option_defs || []), entry.topic_category || '']
+      [entry.id, entry.word, entry.level, entry.pos, entry.sentence, JSON.stringify(entry.options || []), entry.correct_answer, entry.topic, entry.template, entry.chinese || '', entry.sentence_cn || '', entry.cache_version || 0, entry.definition || '', JSON.stringify(entry.option_defs || []), entry.topic_category || '', entry.phonetic || '']
     );
     await bumpSeq(client, 'word_bank');
   } finally { client.release(); }
