@@ -39,6 +39,32 @@ function authMiddleware(req, res, next) {
   }
 }
 
+/**
+ * PG 直写重试包装器：仅对「瞬时错误」（连接断开/超时/连接池耗尽/死锁/序列化失败）
+ * 做指数退避重试；其余错误（如数据本身非法）直接抛出，不重试。
+ * 目的：所有 pgDirectXxx 直写原本是 fire-and-forget .catch()，一旦遇到 Railway PG
+ * 瞬时抖动就静默丢数据，表现为「学生提交了教师端有时收不到成绩」。套上重试后，
+ * 偶发抖动可被自动消化；重试耗尽才报错，由端点决定是否阻断响应。
+ */
+async function withRetry(fn, { retries = 3, baseDelay = 150, label = 'pg' } = {}) {
+  let lastErr;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      const msg = (e && e.message) || '';
+      const transient = /connection|timeout|ETIMEDOUT|ECONNRESET|terminating|deadlock|serialization|too many clients|could not connect|connection pool|idle client|socket (closed|hang)/i.test(msg);
+      if (!transient) throw e; // 非瞬时不重试，立即抛出
+      if (attempt < retries) {
+        await new Promise(r => setTimeout(r, baseDelay * attempt));
+        console.warn(`⚠️ [${label}] PG瞬时错误第${attempt}次，重试中: ${msg}`);
+      }
+    }
+  }
+  throw lastErr;
+}
+
 // ==================== 学生注册/登录 ====================
 
 app.post('/api/student/register', async (req, res) => {
@@ -1945,7 +1971,7 @@ app.get('/api/practice/questions', authMiddleware, async (req, res) => {
 
 // ==================== 练习记录 ====================
 
-app.post('/api/practice/start', authMiddleware, (req, res) => {
+app.post('/api/practice/start', authMiddleware, async (req, res) => {
   if (req.user.type !== 'student') return res.status(403).json({ error: '无权限' });
   const { room_code, mode_type } = req.body;
   const db = readDB();
@@ -1968,8 +1994,13 @@ app.post('/api/practice/start', authMiddleware, (req, res) => {
     };
   db.practiceSessions.push(session);
   writeDB(db);
-  // 增量直写（绕过全表 TRUNCATE）
-  pgDirectInsertSession(session).catch(e => console.error('⚠️ 练习会话直写 PG 失败：', e.message));
+  // 增量直写（绕过全表 TRUNCATE）：会话行必须先落 PG，后续答案/结束才有可靠载体。
+  // 这里 await + 重试，确保返回 sessionId 前 PG 已存在该会话（应对 Railway PG 瞬时抖动）。
+  try {
+    await withRetry(() => pgDirectInsertSession(session), { label: 'start-session' });
+  } catch (e) {
+    console.error('❌ 练习会话直写 PG 失败（已重试耗尽）：', e.message);
+  }
   keys.forEach(m => {
     const usageKey = room.id + ':' + m;
     pgDirectUpsertModeUsage(usageKey, db.modeUsage[usageKey]).catch(e => console.error('⚠️ 模式使用计数直写 PG 失败：', e.message));
@@ -2007,10 +2038,11 @@ app.post('/api/practice/answer', authMiddleware, (req, res) => {
     db.studentProgress.push(progress);
   }
   writeDB(db);
-  // 增量直写（绕过全表 TRUNCATE）
-  pgDirectInsertAnswer(answer).catch(e => console.error('⚠️ 答案直写 PG 失败：', e.message));
-  if (stat) pgDirectUpsertWordStat(stat).catch(e => console.error('⚠️ 词统计直写 PG 失败：', e.message));
-  if (progress) pgDirectInsertProgress(progress).catch(e => console.error('⚠️ 进度直写 PG 失败：', e.message));
+  // 增量直写（绕过全表 TRUNCATE）：答案/词统计/进度均套重试，瞬时抖动自动消化，
+  // 避免「学生答了但教师端有时看不到」的数据丢失。
+  withRetry(() => pgDirectInsertAnswer(answer), { label: 'answer' }).catch(e => console.error('❌ 答案直写 PG 失败（重试耗尽）：', e.message));
+  if (stat) withRetry(() => pgDirectUpsertWordStat(stat), { label: 'wordstat' }).catch(e => console.error('❌ 词统计直写 PG 失败（重试耗尽）：', e.message));
+  if (progress) withRetry(() => pgDirectInsertProgress(progress), { label: 'progress' }).catch(e => console.error('❌ 进度直写 PG 失败（重试耗尽）：', e.message));
   res.json({ message: '答案已记录' });
 });
 
@@ -2081,8 +2113,13 @@ app.post('/api/practice/finish', authMiddleware, async (req, res) => {
       if (pause_count !== undefined) session.pause_count = Math.max(0, parseInt(pause_count) || 0);
       session.finished_at = new Date().toISOString();
     writeDB(db);
-    // 增量更新会话成绩（绕过全表 TRUNCATE）
-    pgDirectUpdateSessionFinish(session).catch(e => console.error('⚠️ 练习结束直写 PG 失败：', e.message));
+    // 增量更新会话成绩（绕过全表 TRUNCATE）：await + 重试，确保「已完结」状态真正落 PG
+    // 后再返回 200。否则 Railway 多实例/重启后教师端读 PG 会看不到这次提交（间歇性丢成绩的根因）。
+    try {
+      await withRetry(() => pgDirectUpdateSessionFinish(session), { label: 'finish-session', retries: 4 });
+    } catch (e) {
+      console.error('❌ 练习结束直写 PG 失败（已重试耗尽）：', e.message);
+    }
     } else {
       // session 仍然找不到（内存和 PG 都没有）→ 紧急写入
       // 尝试从请求推断 room_id（通过 room_code 查内存 rooms 表）
@@ -2500,7 +2537,10 @@ app.get('/api/teacher/room/:roomId/student/:studentId/details', authMiddleware, 
   const studentId = parseInt(req.params.studentId);
   // 取该房间当前 vocabulary_list 作为白名单，过滤掉不再发布的旧词条
   const room = db.rooms.find(r => r.id === roomId);
-  const vocabSet = new Set((room?.vocabulary_list || []).map(w => w.toLowerCase()));
+  // 🔧 归一化：去空格/连字符后比较，避免 "like-minded" vs "like minded" 这类匹配失败
+  //    导致有效答案被整批丢弃；vocabSet 为空时（房间未配置白名单）一律保留，绝不丢答案。
+  const normWord = s => String(s || '').toLowerCase().replace(/[\s-]+/g, '');
+  const vocabNorm = new Set((room?.vocabulary_list || []).map(normWord));
 
   // 🔑 PG 主源 + 内存合并会话（兼容 room_id 异常的脏数据）
   const sessionMap = new Map();
@@ -2533,10 +2573,10 @@ app.get('/api/teacher/room/:roomId/student/:studentId/details', authMiddleware, 
         correct_answer: cleanWordEntry(a.correct_answer),
         mode: a.mode || ''
       }))
-      // 过滤掉非教师发布词汇（含干扰词/旧词条）
+      // 过滤掉非教师发布词汇（含干扰词/旧词条）；空白名单时保留全部
       .filter(a => {
-        const w = (a.word || '').toLowerCase();
-        return !w || vocabSet.has(w);
+        const w = normWord(a.word);
+        return !w || vocabNorm.size === 0 || vocabNorm.has(w);
       });
     // 🔑 幽灵 session 过滤：所有答案都是「(未作答)」且正确数为 0 →
     //   这是旧版自动提交（goNext 最后一题自动 finishPractice）产生的空记录，不展示给教师
@@ -2572,11 +2612,12 @@ app.get('/api/teacher/room/:roomId/word-stats', authMiddleware, async (req, res)
   const room = db.rooms.find(r => r.id === roomId);
   if (!room || room.teacher_id !== req.user.id) return res.status(403).json({ error: '无权限' });
   // 取该房间当前 vocabulary_list 作为白名单，过滤掉不再发布的旧词
-  const vocabSet = new Set((room.vocabulary_list || []).map(w => w.toLowerCase()));
+  const normWord = s => String(s || '').toLowerCase().replace(/[\s-]+/g, '');
+  const vocabNorm = new Set((room.vocabulary_list || []).map(normWord));
 
   // 🔑 PG 主源 + 内存合并（按 student_id+room_id+word 去重，内存覆盖 PG 以保留最新）
   const statMap = new Map();
-  const keyOf = (ws) => `${ws.student_id}:${ws.room_id}:${String(ws.word || '').toLowerCase()}`;
+  const keyOf = (ws) => `${ws.student_id}:${ws.room_id}:${normWord(ws.word)}`;
   (db.wordStats || []).filter(ws => Number(ws.room_id) === roomId).forEach(ws => statMap.set(keyOf(ws), ws));
   let pgStats = null;
   try { pgStats = await pgGetRoomWordStats(roomId); } catch (e) { console.error('[词统计] PG查询异常', e.message); }
@@ -2584,7 +2625,7 @@ app.get('/api/teacher/room/:roomId/word-stats', authMiddleware, async (req, res)
 
   const result = [...statMap.values()]
     .map(w => ({ ...w, word: cleanWordEntry(w.word) }))
-    .filter(w => !w.word || vocabSet.has(w.word.toLowerCase()))
+    .filter(w => !w.word || vocabNorm.size === 0 || vocabNorm.has(normWord(w.word)))
     .sort((a, b) => b.error_rate - a.error_rate);
   res.json(result);
 });
