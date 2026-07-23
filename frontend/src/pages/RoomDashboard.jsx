@@ -267,10 +267,11 @@ export default function RoomDashboard() {
                 const isOpen = expanded === stu.id;
                 const d = Array.isArray(details[stu.id]) ? details[stu.id] : [];
                 const accColor = stu.overall_accuracy >= 80 ? 'text-green-600' : stu.overall_accuracy >= 60 ? 'text-yellow-600' : 'text-red-600';
+                const isSubmitted = !!stu.submitted;
                 return (
-                  <div key={stu.id} className="border border-gray-200 rounded-lg">
+                  <div key={stu.id} className={`border rounded-lg transition ${isSubmitted ? 'border-emerald-200 bg-emerald-50/60' : 'border-gray-200 bg-white'}`}>
                     <button onClick={() => toggleStudent(stu)}
-                      className="w-full text-left p-3 flex justify-between items-center hover:bg-gray-50 transition">
+                      className={`w-full text-left p-3 flex justify-between items-center transition ${isSubmitted ? 'hover:bg-emerald-100/60' : 'hover:bg-gray-50'}`}>
                       <div>
                         <span className="font-bold text-gray-800">{stu.name || stu.username}</span>
                         <span className="text-xs text-gray-500 ml-2">{stu.username}</span>
