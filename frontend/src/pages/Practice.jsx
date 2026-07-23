@@ -1256,6 +1256,7 @@ export default function Practice() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showResult, setShowResult] = useState(false);
+  const [allModesComplete, setAllModesComplete] = useState(false); // 所有模式已浏览完（等手动提交）
   const [results, setResults] = useState([]);               // 所有已答记录（跨模式）
 
   // 通用交互态（非翻卡牌模式用）
@@ -1612,7 +1613,9 @@ export default function Practice() {
       // 当前模式做完了，跳下一个模式
       const curIdx = modes.indexOf(activeMode);
       if (curIdx < modes.length - 1) switchToMode(modes[curIdx + 1]);
-      else finishPractice();
+      // 所有模式都做完了 → 不再自动提交，等学生手动点「完成全部练习」或「提交并退出」
+      // else finishPractice();  ← 移除自动提交：逐题浏览完不应产生服务端session记录
+      else { setAllModesComplete(true); }
     }
   };
   const goPrev = () => {
@@ -1860,6 +1863,7 @@ export default function Practice() {
 
   const restartPractice = async (onlyWrong) => {
     setShowResult(false);
+    setAllModesComplete(false);
     if (!onlyWrong) {
       // 「全部重练」：明确刷新状态
       try { localStorage.setItem('fresh_practice:' + roomCode, '1'); } catch (_) {}
@@ -1935,8 +1939,8 @@ export default function Practice() {
     </div>
   );
 
-  // ===== 完成结果（含逐题详情） =====
-  if (showResult) {
+  // ===== 完成结果（含逐题详情）—— 已手动提交 或 所有模式浏览完毕待提交 =====
+  if (showResult || allModesComplete) {
     const cc = results.filter(r => r.is_correct).length;
     const totalAll = Object.values(questionsByMode).flat().length;
     const sc = totalAll > 0 ? Math.round((cc / totalAll) * 100) : 0;
@@ -2115,8 +2119,17 @@ export default function Practice() {
 
           {/* 底部按钮 */}
           <div className="flex gap-2 mb-3 sticky bottom-0 bg-gray-50 pb-2 pt-1">
-            <button onClick={() => navigate('/history')} className="flex-1 text-xs bg-gray-800 text-white py-2.5 rounded hover:bg-gray-700">查看历史</button>
-            <button onClick={() => navigate('/')} className="flex-1 text-xs border border-gray-300 text-gray-700 py-2.5 rounded hover:bg-gray-50">返回首页</button>
+            {allModesComplete && !showResult ? (
+              <>
+                <button onClick={finishPractice} className="flex-[2] text-xs bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 font-bold text-sm shadow-md">✅ 提交成绩</button>
+                <button onClick={() => navigate('/')} className="flex-1 text-xs border border-gray-300 text-gray-700 py-3 rounded hover:bg-gray-50">放弃退出</button>
+              </>
+            ) : (
+              <>
+                <button onClick={() => navigate('/history')} className="flex-1 text-xs bg-gray-800 text-white py-2.5 rounded hover:bg-gray-700">查看历史</button>
+                <button onClick={() => navigate('/')} className="flex-1 text-xs border border-gray-300 text-gray-700 py-2.5 rounded hover:bg-gray-50">返回首页</button>
+              </>
+            )}
           </div>
           <div className="grid grid-cols-2 gap-2 pb-1">
             <button onClick={() => restartPractice(false)} className="text-xs bg-indigo-600 text-white py-2.5 rounded-lg hover:bg-indigo-700">🔄 换一批新题</button>

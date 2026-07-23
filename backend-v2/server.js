@@ -2538,6 +2538,16 @@ app.get('/api/teacher/room/:roomId/student/:studentId/details', authMiddleware, 
         const w = (a.word || '').toLowerCase();
         return !w || vocabSet.has(w);
       });
+    // 🔑 幽灵 session 过滤：所有答案都是「(未作答)」且正确数为 0 →
+    //   这是旧版自动提交（goNext 最后一题自动 finishPractice）产生的空记录，不展示给教师
+    const allUnanswered = answerList.length > 0 && answerList.every(a => {
+      const sa = String(a.student_answer || '').trim().replace(/[（）()]/g, '');
+      return sa === '未作答' || sa === '';
+    });
+    if (allUnanswered && (s.correct_count || 0) === 0) {
+      console.log(`⏭️ 跳过幽灵 session id=${s.id}: ${answerList.length} 条答案全部未作答`);
+      continue;
+    }
     result.push({
       session_id: s.id,
       finished_at: s.finished_at,
