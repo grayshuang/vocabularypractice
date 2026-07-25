@@ -2517,9 +2517,17 @@ app.get('/api/teacher/room/:roomId/students', authMiddleware, async (req, res) =
       return ps.student_id === s.id && (rid === roomId || (rid <= 0 || !rid));
     });
     const finishedSessions = sessions.filter(ps => ps.finished_at);
-    const totalQ = sessions.reduce((a, b) => a + (b.total_questions || 0), 0);
-    const totalC = sessions.reduce((a, b) => a + (b.correct_count || 0), 0);
-    const overallAccuracy = totalQ > 0 ? Math.round((totalC / totalQ) * 100) : 0;
+    // 🔑 安全网：逐 session 钳制 correct_count ≤ total_questions，防止「只练错题」等场景
+    //   导致单次 session 正确率 > 100% 进而拉高汇总准确率。
+    const safeSessions = sessions.map(ps => {
+      const tq = Math.max(0, ps.total_questions || 0);
+      const tc = Math.min(ps.correct_count || 0, tq); // 钳制：正确数不超过总题数
+      return { ...ps, _safeTQ: tq, _safeTC: tc };
+    });
+    const totalQ = safeSessions.reduce((a, b) => a + b._safeTQ, 0);
+    const totalC = safeSessions.reduce((a, b) => a + b._safeTC, 0);
+    const rawAccuracy = totalQ > 0 ? Math.round((totalC / totalQ) * 100) : 0;
+    const overallAccuracy = Math.min(rawAccuracy, 100); // 最终封顶 100%
     const lastSubmitted = finishedSessions.length
       ? finishedSessions.reduce((mx, ps) => ps.finished_at > mx ? ps.finished_at : mx, finishedSessions[0].finished_at)
       : null;
@@ -2588,15 +2596,17 @@ app.get('/api/teacher/room/:roomId/student/:studentId/details', authMiddleware, 
       console.log(`⏭️ 跳过幽灵 session id=${s.id}: ${answerList.length} 条答案全部未作答`);
       continue;
     }
+    const safeTQ = Math.max(0, s.total_questions || 0);
+    const safeTC = Math.min(s.correct_count || 0, safeTQ);
     result.push({
       session_id: s.id,
       finished_at: s.finished_at,
       score: s.score,
-      total_questions: s.total_questions,
-      correct_count: s.correct_count,
+      total_questions: safeTQ,
+      correct_count: safeTC,
       elapsed_time: s.elapsed_time || 0,
       pause_count: s.pause_count || 0,
-      accuracy: s.total_questions ? Math.round((s.correct_count / s.total_questions) * 100) : 0,
+      accuracy: safeTQ ? Math.round((safeTC / safeTQ) * 100) : 0,
       answers: answerList
     });
   }

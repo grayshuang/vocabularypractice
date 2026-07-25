@@ -1846,7 +1846,13 @@ export default function Practice() {
       }
     }
 
-    const cc = results.filter(r => r.is_correct).length;
+    // 🔑 关键修复：只统计当前题目集内的答案，避免「只练错题」时
+    //   旧 results（含上轮全部正确答案）对缩小的题目集产生 >100% 正确率。
+    //   场景：上轮28题答对24个 → 只练4道错题 → results仍有24个correct +
+    //   本轮新答的4个 → cc=28, total=4 → 700%。修复后只匹配当前 uid 范围。
+    const questionUids = new Set(allQuestions.map(q => q.uid));
+    const relevantResults = results.filter(r => questionUids.has(r.uid));
+    const cc = relevantResults.filter(r => r.is_correct).length;
     const total = allQuestions.length;
     const score = total > 0 ? Math.round((cc / total) * 100) : 0;
     const elapsed = Math.round(getElapsedSec());
