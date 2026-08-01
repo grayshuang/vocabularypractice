@@ -93,9 +93,11 @@ async function ensureTables() {
       practice_modes JSONB DEFAULT '[]',
       mode_word_map JSONB DEFAULT '{}',
       level TEXT DEFAULT '6',
+      lexicon_source TEXT DEFAULT 'ai',
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `);
+  await pgQuery(`ALTER TABLE rooms ADD COLUMN IF NOT EXISTS lexicon_source TEXT DEFAULT 'ai'`);
   await pgQuery(`
     CREATE TABLE IF NOT EXISTS student_rooms (
       id SERIAL PRIMARY KEY,
@@ -503,14 +505,14 @@ async function pgDirectUpsertRoom(room) {
   const client = await pool.connect();
   try {
     await client.query(
-      `INSERT INTO rooms (id, room_code, teacher_id, vocabulary_list, practice_modes, mode_word_map, level, created_at)
-       VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7,$8)
+      `INSERT INTO rooms (id, room_code, teacher_id, vocabulary_list, practice_modes, mode_word_map, level, lexicon_source, created_at)
+       VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7,$8,$9)
        ON CONFLICT (id) DO UPDATE SET
          room_code=EXCLUDED.room_code, teacher_id=EXCLUDED.teacher_id,
          vocabulary_list=EXCLUDED.vocabulary_list, practice_modes=EXCLUDED.practice_modes,
-         mode_word_map=EXCLUDED.mode_word_map, level=EXCLUDED.level
+         mode_word_map=EXCLUDED.mode_word_map, level=EXCLUDED.level, lexicon_source=EXCLUDED.lexicon_source
        RETURNING id`,
-      [room.id, room.room_code, room.teacher_id, JSON.stringify(room.vocabulary_list), JSON.stringify(room.practice_modes || []), JSON.stringify(room.mode_word_map || {}), room.level || '6', room.created_at]
+      [room.id, room.room_code, room.teacher_id, JSON.stringify(room.vocabulary_list), JSON.stringify(room.practice_modes || []), JSON.stringify(room.mode_word_map || {}), room.level || '6', room.lexicon_source || 'ai', room.created_at]
     );
     await bumpSeq(client, 'rooms');
   } finally { client.release(); }

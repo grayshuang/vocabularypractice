@@ -218,15 +218,24 @@ app.post('/api/admin/login', (req, res) => {
 
 app.post('/api/room/create', authMiddleware, (req, res) => {
   if (req.user.type !== 'teacher') return res.status(403).json({ error: '无权限' });
-  const { vocabulary_list, practice_modes, mode_word_map, level } = req.body;
+  const { vocabulary_list, practice_modes, mode_word_map, level, lexicon_source } = req.body;
   const db = readDB();
   const room_code = Math.floor(100000 + Math.random() * 900000).toString();
+  // lexicon_source 决定题目来源：'curated'=只用内置审定词库（禁用 AI 假句）；'ai'=原有 AI 生成（默认）。
+  // 未显式指定时：若房间词汇表全部落在内置审定词库内，则自动启用 curated（满足「设置房间时只用这些词汇」）。
+  let lexSrc = lexicon_source || 'ai';
+  if (!lexicon_source) {
+    const cleaned = (vocabulary_list || []).map(cleanWordEntry).map(s => s.toLowerCase());
+    const allInLexicon = cleaned.length > 0 && cleaned.every(k => BUILTIN_LEXICON.has(k));
+    lexSrc = allInLexicon ? 'curated' : 'ai';
+  }
   const room = {
     id: genId(db.rooms), room_code, teacher_id: req.user.id,
     vocabulary_list: vocabulary_list || null,
     practice_modes: practice_modes || [],
     mode_word_map: mode_word_map || {},
     level: ['5', '6', '7+'].includes(level) ? level : '6',
+    lexicon_source: lexSrc,
     created_at: new Date().toISOString()
   };
   db.rooms.push(room);
@@ -250,7 +259,7 @@ app.get('/api/teacher/rooms', authMiddleware, (req, res) => {
     const joinedIds = db.studentRooms.filter(sr => sr.room_id === room.id).map(sr => sr.student_id);
     const allStudentIds = [...new Set([...joinedIds, ...practiceStudentIds])];
     const studentCount = allStudentIds.length;
-    return { ...room, student_count: studentCount };
+    return { ...room, student_count: studentCount, lexicon_source: room.lexicon_source || 'ai' };
   });
   res.json(rooms);
 });
@@ -301,6 +310,7 @@ app.get('/api/room/:roomCode', (req, res) => {
     practice_modes: room.practice_modes,
     mode_word_map: room.mode_word_map || {},
     level: room.level || '6',
+    lexicon_source: room.lexicon_source || 'ai',
     mode_usage: usage,
     student_count: studentCount,
     teacher_name: teacher ? teacher.username : '未知'
@@ -501,6 +511,26 @@ const COMMON_DISTRACTORS = [
 // 词库缓存版本号：每次修改题目生成质量（如修复模板句/脏数据）后 +1，
 // 旧版本缓存自动失效，下次请求强制重新 AI 生成干净句子，无需手动清库。
 const CACHE_VERSION = 17;
+
+// ==================== 内置审定词库（lexicon_full.json，来自雅思3-4分词汇PDF） ====================
+// 这些词条已由人工/模型审定：definition、3个同义替换、两个例句（易句band3.5 / Part3句band4）、中文翻译齐备。
+// 当房间 lexicon_source === 'curated' 时，题目完全来自该词库，绝不使用 AI 假句兜底。
+const BUILTIN_LEXICON = new Map();
+try {
+  const lexPath = path.join(__dirname, 'lexicon_full.json');
+  if (fs.existsSync(lexPath)) {
+    const lexArr = JSON.parse(fs.readFileSync(lexPath, 'utf-8'));
+    for (const e of lexArr) {
+      const k = (e.word || '').trim().toLowerCase();
+      if (k) BUILTIN_LEXICON.set(k, e);
+    }
+    console.log('[lexicon] 内置审定词库已加载，词条数：', BUILTIN_LEXICON.size);
+  } else {
+    console.warn('[lexicon] 未找到 lexicon_full.json，curated 模式将不可用');
+  }
+} catch (e) {
+  console.error('[lexicon] 加载 lexicon_full.json 失败：', e.message);
+}
 
 // 不同目标分数对应的句子复杂度指导（注入到 AI 生成 prompt）
 const LEVEL_GUIDE = {
@@ -1307,7 +1337,60 @@ async function generateQuestionsWithAI(vocabularyList, level) {
  * - 命中缓存（wordBank）直接返回，0 token 消耗，句子固定
  * - 未命中才调 AI 生成，并写回缓存，下次复用
  */
-async function getQuestionsCached(vocabularyList, level) {
+// 用内置审定词库构建题目（curated 模式）：完全避开 AI / fallback 假句。
+// 只使用词库中确实存在且例句含 ______ 的词；其余词直接跳过（不回退 AI）。
+function buildCuratedQuestions(vocabularyList, level) {
+  const lv = ['5', '6', '7+'].includes(level) ? level : '6';
+  const usePart3 = lv === '7+';
+  const result = [];
+  for (const rawW of (vocabularyList || [])) {
+    const w = cleanWordEntry(rawW);
+    if (!w) continue;
+    const key = w.toLowerCase();
+    const entry = BUILTIN_LEXICON.get(key);
+    if (!entry) continue; // 词库中无此词 → 跳过，绝不用 AI 假句兜底
+    const sentence = usePart3 ? (entry.part3_sentence || '') : (entry.easy_sentence || '');
+    const sentence_cn = usePart3 ? (entry.sentence_cn_part3 || '') : (entry.sentence_cn_easy || '');
+    if (!sentence || !/_{4,}/.test(sentence)) continue; // 例句必须含挖空，否则跳过
+    // 干扰项：优先用该词的 3 个同义替换，不足则从词库其它词补齐到 3 个
+    let distractors = [entry.synonym1, entry.synonym2, entry.synonym3]
+      .map(s => cleanWordEntry(s)).filter(Boolean)
+      .filter(s => s.toLowerCase() !== key);
+    const otherKeys = [...BUILTIN_LEXICON.keys()].filter(k => k !== key);
+    let pi = 0;
+    while (distractors.length < 3 && pi < otherKeys.length) {
+      const d = cleanWordEntry(BUILTIN_LEXICON.get(otherKeys[pi]).word);
+      if (d && d.toLowerCase() !== key && !distractors.some(o => o.toLowerCase() === d.toLowerCase())) distractors.push(d);
+      pi++;
+    }
+    const options = shuffleArray([w, ...distractors]).slice(0, Math.max(2, distractors.length + 1));
+    result.push({
+      word: w,
+      pos: entry.pos || '',
+      sentence,
+      sentence_cn: (typeof sentence_cn === 'string' && sentence_cn.trim() && !isTemplateChinese(sentence_cn)) ? sentence_cn.replace(/\s+/g, ' ').trim() : '',
+      options,
+      correct_answer: w,
+      definition: entry.definition_en || '',
+      option_defs: [],
+      chinese: entry.chinese || '',
+      phonetic: entry.phonetic || '',
+      topic: '',
+      template: 'curated',
+      level: lv,
+      cache_version: CACHE_VERSION,
+      topic_category: '',
+      source: 'curated'
+    });
+  }
+  return result;
+}
+
+async function getQuestionsCached(vocabularyList, level, opts) {
+  // curated 模式：完全使用内置审定词库，跳过 AI / fallback 假句兜底
+  if (opts && opts.curated) {
+    return buildCuratedQuestions(vocabularyList, level);
+  }
   const lv = ['5', '6', '7+'].includes(level) ? level : '6';
   if (!vocabularyList || vocabularyList.length === 0) return [];
   // 清洗词汇表：去掉每条的中文和词性标注，只保留纯英文单词
@@ -1960,7 +2043,7 @@ app.get('/api/practice/questions', authMiddleware, async (req, res) => {
       if (vocabularyList.length === 0) {
         return res.status(400).json({ error: '该模式还没有分配词汇' });
       }
-      questions = await getQuestionsCached(vocabularyList, room.level);
+      questions = await getQuestionsCached(vocabularyList, room.level, { curated: room.lexicon_source === 'curated' });
     }
     res.json(questions);
   } catch (err) {
@@ -2491,10 +2574,28 @@ app.get('/api/teacher/room/:roomId/students', authMiddleware, async (req, res) =
   db.practiceSessions.forEach(ps => {
     if (Number(ps.room_id) === roomId) sessionMap.set(ps.id, ps);
   });
-  // PG 会话补全
+  // PG 会话补全（按 room_id）
   let pgRows = null;
   try { pgRows = await pgGetRoomSessions(roomId, { onlyFinished: false }); } catch (e) { console.error('[教师学生列表] PG查询异常', e.message); }
   if (pgRows) pgRows.forEach(r => { if (!sessionMap.has(r.id)) sessionMap.set(r.id, r); });
+
+  // 🔑 补充拉取：已加入本房间的正式学生，其 session 的 room_id 可能因历史 bug
+  //   （旧版紧急 INSERT 写入 room_id=0）或 多实例 id 碰撞 而 ≠ 当前 roomId，
+  //   被上面 pgGetRoomSessions 的 SQL `room_id = $1` 过滤掉，导致教师端看不到提交。
+  //   改为按 student_id 再拉一次已完成 session（与学生自己看历史的路径一致），
+  //   归一化 room_id 到当前房间后合并，保证教师能看见。
+  for (const jid of joinedIds) {
+    try {
+      const stuPg = await pgGetStudentFinishedSessions(jid);
+      if (stuPg && stuPg.length) {
+        stuPg.forEach(r => {
+          if (!sessionMap.has(r.id)) {
+            sessionMap.set(r.id, { ...r, room_id: roomId });
+          }
+        });
+      }
+    } catch (e) { console.error('[教师学生列表] 补充拉取学生PG会话异常', e.message); }
+  }
 
   const allSessions = [...sessionMap.values()];
   // 🔑 兼容脏数据：旧版紧急 INSERT 写入 room_id=0，导致正常 room_id 过滤丢失记录。
