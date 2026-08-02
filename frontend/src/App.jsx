@@ -76,11 +76,11 @@ function App() {
 
         {/* 教师后台（需教师令牌） */}
         <Route path="/dashboard" element={<ProtectedRoute allowedType="teacher"><Dashboard /></ProtectedRoute>} />
-        <Route path="/lexicon" element={<ProtectedRoute allowedType="teacher"><LexiconManager /></ProtectedRoute>} />
         <Route path="/room/:roomCode" element={<ProtectedRoute allowedType="teacher"><RoomDashboard /></ProtectedRoute>} />
 
         {/* 超级管理员后台（需 admin 令牌） */}
         <Route path="/admin" element={<ProtectedRoute allowedType="admin"><AdminDashboard /></ProtectedRoute>} />
+        <Route path="/admin/lexicon" element={<ProtectedRoute allowedType="admin"><LexiconManager /></ProtectedRoute>} />
 
         {/* 兜底 */}
         <Route path="*" element={<Navigate to="/student" />} />

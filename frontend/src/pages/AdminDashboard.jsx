@@ -68,6 +68,13 @@ export default function AdminDashboard() {
               {tab.label}
             </button>
           ))}
+          <div className="border-t border-gray-100 my-1"></div>
+          <button
+            onClick={() => navigate('/admin/lexicon')}
+            className="w-full text-left px-4 py-2 rounded-lg transition text-red-700 bg-red-50 hover:bg-red-100 font-medium"
+          >
+            📚 词库管理
+          </button>
         </div>
 
         {/* 主内容 */}

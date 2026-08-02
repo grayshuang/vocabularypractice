@@ -2821,9 +2821,16 @@ app.put('/api/admin/teacher/:id/status', authMiddleware, (req, res) => {
 
 // ==================== 审定词库管理（教师 / 管理员） ====================
 // 可在线编辑的"词库 excel"：列表、搜索、新增、修改、删除。数据真相在 PG lexicon 表。
+// 读接口（含 minimal 词表）：教师+管理员可访问，用于教师端「4分」标签展示
 function lexiconAuth(req, res, next) {
   if (!req.user) return res.status(401).json({ error: '未登录' });
   if (req.user.type !== 'teacher' && req.user.type !== 'admin') return res.status(403).json({ error: '无权限' });
+  next();
+}
+// 写接口（增删改）：仅管理员
+function requireLexiconAdmin(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: '未登录' });
+  if (req.user.type !== 'admin') return res.status(403).json({ error: '无权限（仅管理员可编辑词库）' });
   next();
 }
 
@@ -2839,7 +2846,7 @@ app.get('/api/lexicon', lexiconAuth, async (req, res) => {
   }
 });
 
-app.post('/api/lexicon', lexiconAuth, async (req, res) => {
+app.post('/api/lexicon', requireLexiconAdmin, async (req, res) => {
   try {
     const e = req.body || {};
     if (!e.word || !String(e.word).trim()) return res.status(400).json({ error: 'word 不能为空' });
@@ -2854,7 +2861,7 @@ app.post('/api/lexicon', lexiconAuth, async (req, res) => {
   }
 });
 
-app.put('/api/lexicon/:id', lexiconAuth, async (req, res) => {
+app.put('/api/lexicon/:id', requireLexiconAdmin, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (!Number.isFinite(id)) return res.status(400).json({ error: 'id 无效' });
@@ -2871,7 +2878,7 @@ app.put('/api/lexicon/:id', lexiconAuth, async (req, res) => {
   }
 });
 
-app.delete('/api/lexicon/:id', lexiconAuth, async (req, res) => {
+app.delete('/api/lexicon/:id', requireLexiconAdmin, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (!Number.isFinite(id)) return res.status(400).json({ error: 'id 无效' });

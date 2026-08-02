@@ -326,7 +326,6 @@ export default function Dashboard() {
         <div className="max-w-6xl mx-auto px-4 py-3 flex justify-between items-center">
           <h1 className="text-xl font-bold text-indigo-700">教师控制台</h1>
           <div className="flex items-center gap-4">
-            <button onClick={() => navigate('/lexicon')} className="text-sm text-indigo-600 hover:text-indigo-800">📚 词库管理</button>
             <span className="text-gray-700">{teacherName}，你好！</span>
             <button onClick={handleLogout} className="text-sm text-red-600 hover:text-red-800">退出</button>
           </div>

@@ -183,12 +183,12 @@ export default function LexiconManager() {
   function handleLogout() { logout(); window.location.href = '/teacher'; }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+    <div className="min-h-screen bg-gradient-to-br from-red-50 to-orange-100">
       <nav className="bg-white shadow-sm">
         <div className="max-w-6xl mx-auto px-4 py-3 flex justify-between items-center">
           <div className="flex items-center gap-3">
-            <button onClick={() => navigate('/dashboard')} className="text-indigo-600 hover:text-indigo-800 text-sm">← 返回控制台</button>
-            <h1 className="text-xl font-bold text-indigo-700">审定词库</h1>
+            <button onClick={() => navigate('/admin')} className="text-red-600 hover:text-red-800 text-sm">← 返回管理员后台</button>
+            <h1 className="text-xl font-bold text-red-700">审定词库</h1>
             <span className="px-2 py-0.5 rounded-full bg-pink-100 text-pink-700 text-xs font-medium">雅思 3-4 分</span>
           </div>
           <button onClick={handleLogout} className="text-sm text-red-600 hover:text-red-800">退出</button>
