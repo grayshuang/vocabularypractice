@@ -24,6 +24,7 @@ export default function Dashboard() {
   const [deletingCode, setDeletingCode] = useState('');
   const [selectedRooms, setSelectedRooms] = useState([]);
   const [batchDeleting, setBatchDeleting] = useState(false);
+  const [lexiconWords, setLexiconWords] = useState(new Set()); // 审定词库中的词（小写），用于打「4分」标签
 
   // 向导
   const [showWizard, setShowWizard] = useState(false);
@@ -41,7 +42,19 @@ export default function Dashboard() {
 
   const navigate = useNavigate();
 
-  useEffect(() => { loadRooms(); loadTeacherInfo(); }, []);
+  useEffect(() => { loadRooms(); loadTeacherInfo(); loadLexiconWords(); }, []);
+
+  // 拉取审定词库词表，用于在词汇列表中对「4分」词条打标签
+  async function loadLexiconWords() {
+    try {
+      const res = await api.getLexiconWords();
+      const set = new Set((res.items || []).map(i => (i.word || '').trim().toLowerCase()));
+      setLexiconWords(set);
+    } catch (err) { /* 标签缺失不影响主流程 */ }
+  }
+  function isCurated(word) {
+    return lexiconWords.has((word || '').trim().toLowerCase());
+  }
 
   function loadTeacherInfo() {
     try {
@@ -313,6 +326,7 @@ export default function Dashboard() {
         <div className="max-w-6xl mx-auto px-4 py-3 flex justify-between items-center">
           <h1 className="text-xl font-bold text-indigo-700">教师控制台</h1>
           <div className="flex items-center gap-4">
+            <button onClick={() => navigate('/lexicon')} className="text-sm text-indigo-600 hover:text-indigo-800">📚 词库管理</button>
             <span className="text-gray-700">{teacherName}，你好！</span>
             <button onClick={handleLogout} className="text-sm text-red-600 hover:text-red-800">退出</button>
           </div>
@@ -670,6 +684,7 @@ export default function Dashboard() {
                               className={'px-3 py-2 rounded-lg text-sm border-2 transition ' + (isSelected ? 'border-indigo-500 bg-indigo-100 text-indigo-700' : isAssigned ? 'border-green-400 bg-green-50 text-green-700' : 'border-gray-200 bg-white text-gray-700 hover:border-gray-400')}
                             >
                               {(isAssigned ? '✓ ' : '') + word}
+                              {isCurated(word) && <span className="ml-1 px-1 py-0.5 rounded bg-pink-100 text-pink-700 text-[10px] font-medium align-middle">4分</span>}
                             </button>
                           );
                         })}
@@ -701,6 +716,7 @@ export default function Dashboard() {
                             {modeWords.map((w, i) => (
                               <span key={i} className="inline-flex items-center gap-1 px-2 py-1 bg-white border border-gray-200 rounded text-xs">
                                 {w}
+                                {isCurated(w) && <span className="px-1 py-0.5 rounded bg-pink-100 text-pink-700 text-[10px] font-medium">4分</span>}
                                 <button onClick={() => removeWord(w, modeId)} className="text-red-400 hover:text-red-600 ml-1">&times;</button>
                               </span>
                             ))}

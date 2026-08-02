@@ -7,6 +7,7 @@ import AdminLogin from './pages/AdminLogin';
 import AdminDashboard from './pages/AdminDashboard';
 import Dashboard from './pages/Dashboard';
 import RoomDashboard from './pages/RoomDashboard';
+import LexiconManager from './pages/LexiconManager';
 import Register from './pages/Register';
 import StudentLogin from './pages/StudentLogin';
 import TeacherLogin from './pages/TeacherLogin';
@@ -75,6 +76,7 @@ function App() {
 
         {/* 教师后台（需教师令牌） */}
         <Route path="/dashboard" element={<ProtectedRoute allowedType="teacher"><Dashboard /></ProtectedRoute>} />
+        <Route path="/lexicon" element={<ProtectedRoute allowedType="teacher"><LexiconManager /></ProtectedRoute>} />
         <Route path="/room/:roomCode" element={<ProtectedRoute allowedType="teacher"><RoomDashboard /></ProtectedRoute>} />
 
         {/* 超级管理员后台（需 admin 令牌） */}

@@ -192,6 +192,24 @@ async function ensureTables() {
       count INTEGER DEFAULT 1
     )
   `);
+  // ===== 审定词库（雅思3-4分词汇，来自 PDF，可在线编辑）=====
+  await pgQuery(`
+    CREATE TABLE IF NOT EXISTS lexicon (
+      id SERIAL PRIMARY KEY,
+      word TEXT NOT NULL UNIQUE,
+      pos TEXT,
+      phonetic TEXT,
+      chinese TEXT,
+      definition_en TEXT,
+      synonym1 TEXT,
+      synonym2 TEXT,
+      synonym3 TEXT,
+      easy_sentence TEXT,
+      part3_sentence TEXT,
+      sentence_cn_easy TEXT,
+      sentence_cn_part3 TEXT
+    )
+  `);
 
   // 初始化默认管理员（如果不存在）
   const admins = await pgQuery('SELECT * FROM admins LIMIT 1');
@@ -782,6 +800,121 @@ async function pgGetRoomWordStats(roomId) {
   }
 }
 
+// ==================== 审定词库 lexicon ====================
+function rowToLexicon(r) {
+  return {
+    id: r.id,
+    word: r.word,
+    pos: r.pos || '',
+    phonetic: r.phonetic || '',
+    chinese: r.chinese || '',
+    definition_en: r.definition_en || '',
+    synonym1: r.synonym1 || '',
+    synonym2: r.synonym2 || '',
+    synonym3: r.synonym3 || '',
+    easy_sentence: r.easy_sentence || '',
+    part3_sentence: r.part3_sentence || '',
+    sentence_cn_easy: r.sentence_cn_easy || '',
+    sentence_cn_part3: r.sentence_cn_part3 || ''
+  };
+}
+
+async function pgCountLexicon() {
+  if (!pool) return 0;
+  try {
+    const rows = await pgQuery('SELECT COUNT(*)::int AS n FROM lexicon');
+    return rows[0]?.n || 0;
+  } catch (e) {
+    console.error('⚠️ PG 统计词库失败：', e.message);
+    return 0;
+  }
+}
+
+// 增量 UPSERT 单条词库（写入 PG 真相层）
+async function pgDirectUpsertLexicon(entry) {
+  if (!pool) throw new Error('PG 未连接');
+  const e = entry || {};
+  const word = (e.word || '').trim();
+  if (!word) throw new Error('word 不能为空');
+  const key = word.toLowerCase();
+  // 先按 word 查已有 id（UNIQUE 冲突时复用，避免重复行）
+  let id = e.id;
+  if (!id) {
+    try {
+      const exist = await pgQuery('SELECT id FROM lexicon WHERE LOWER(word) = $1', [key]);
+      if (exist.length) id = exist[0].id;
+    } catch (err) {
+      console.error('⚠️ 查词库已有 id 失败：', err.message);
+    }
+  }
+  const fields = {
+    word: word,
+    pos: e.pos || '',
+    phonetic: e.phonetic || '',
+    chinese: e.chinese || '',
+    definition_en: e.definition_en || '',
+    synonym1: e.synonym1 || '',
+    synonym2: e.synonym2 || '',
+    synonym3: e.synonym3 || '',
+    easy_sentence: e.easy_sentence || '',
+    part3_sentence: e.part3_sentence || '',
+    sentence_cn_easy: e.sentence_cn_easy || '',
+    sentence_cn_part3: e.sentence_cn_part3 || ''
+  };
+  if (id) {
+    await pgQuery(
+      `UPDATE lexicon SET word=$2, pos=$3, phonetic=$4, chinese=$5, definition_en=$6,
+        synonym1=$7, synonym2=$8, synonym3=$9, easy_sentence=$10, part3_sentence=$11,
+        sentence_cn_easy=$12, sentence_cn_part3=$13 WHERE id=$1`,
+      [id, fields.word, fields.pos, fields.phonetic, fields.chinese, fields.definition_en,
+       fields.synonym1, fields.synonym2, fields.synonym3, fields.easy_sentence,
+       fields.part3_sentence, fields.sentence_cn_easy, fields.sentence_cn_part3]
+    );
+    return id;
+  }
+  const ins = await pgQuery(
+    `INSERT INTO lexicon (word, pos, phonetic, chinese, definition_en, synonym1, synonym2, synonym3,
+       easy_sentence, part3_sentence, sentence_cn_easy, sentence_cn_part3)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     ON CONFLICT (word) DO UPDATE SET
+       pos=EXCLUDED.pos, phonetic=EXCLUDED.phonetic, chinese=EXCLUDED.chinese,
+       definition_en=EXCLUDED.definition_en, synonym1=EXCLUDED.synonym1, synonym2=EXCLUDED.synonym2,
+       synonym3=EXCLUDED.synonym3, easy_sentence=EXCLUDED.easy_sentence, part3_sentence=EXCLUDED.part3_sentence,
+       sentence_cn_easy=EXCLUDED.sentence_cn_easy, sentence_cn_part3=EXCLUDED.sentence_cn_part3
+     RETURNING id`,
+    [fields.word, fields.pos, fields.phonetic, fields.chinese, fields.definition_en,
+     fields.synonym1, fields.synonym2, fields.synonym3, fields.easy_sentence,
+     fields.part3_sentence, fields.sentence_cn_easy, fields.sentence_cn_part3]
+  );
+  return ins[0]?.id;
+}
+
+async function pgDirectDeleteLexicon(id) {
+  if (!pool) throw new Error('PG 未连接');
+  await pgQuery('DELETE FROM lexicon WHERE id = $1', [id]);
+}
+
+// 读取词库（教师端管理页 / 标签用）。minimal=1 时只返回 [{id,word}] 轻量列表。
+async function pgGetLexicon({ q = '', minimal = false } = {}) {
+  if (!pool) return [];
+  try {
+    let sql = minimal
+      ? 'SELECT id, word FROM lexicon'
+      : 'SELECT * FROM lexicon';
+    const params = [];
+    if (q) {
+      sql += ' WHERE LOWER(word) LIKE $1 OR LOWER(chinese) LIKE $1 OR LOWER(definition_en) LIKE $1';
+      params.push('%' + q.toLowerCase() + '%');
+    }
+    sql += ' ORDER BY word ASC';
+    const rows = await pgQuery(sql, params);
+    return minimal ? rows.map(r => ({ id: r.id, word: r.word })) : rows.map(rowToLexicon);
+  } catch (e) {
+    console.error('⚠️ PG 读词库失败：', e.message);
+    return [];
+  }
+}
+
 function readDB() {
   // 同步读取（兼容现有代码），PG 模式下只返回 PG 缓存
   if (pgReady) {
@@ -882,4 +1015,4 @@ async function initDB() {
   }
 }
 
-module.exports = { readDB, readDBAsync, writeDB, genId, initDB, flushDB, pgDirectUpsertStudent, pgDirectUpsertTeacher, pgDirectUpdateTeacherPassword, pgDirectUpdateStudentPassword, pgDirectInsertStudentRoom, pgDirectUpsertRoom, pgDirectDeleteRoomCascade, pgDirectUpdateStudentRoomNote, pgDirectDeleteStudentRoom, pgDirectInsertSession, pgDirectUpdateSessionFinish, pgDirectUpdateSessionNote, pgDirectDeleteSession, pgDirectInsertAnswer, pgDirectUpsertWordStat, pgDirectInsertProgress, pgDirectUpsertWordBank, pgDirectUpsertModeUsage, pgDirectUpdateTeacherStatus, pgDirectGetStudentHistory, pgGetRoomSessions, pgGetSessionAnswers, pgGetStudentFinishedSessions, pgGetRoomWordStats, isPG: () => pgReady };
+module.exports = { readDB, readDBAsync, writeDB, genId, initDB, flushDB, pgDirectUpsertStudent, pgDirectUpsertTeacher, pgDirectUpdateTeacherPassword, pgDirectUpdateStudentPassword, pgDirectInsertStudentRoom, pgDirectUpsertRoom, pgDirectDeleteRoomCascade, pgDirectUpdateStudentRoomNote, pgDirectDeleteStudentRoom, pgDirectInsertSession, pgDirectUpdateSessionFinish, pgDirectUpdateSessionNote, pgDirectDeleteSession, pgDirectInsertAnswer, pgDirectUpsertWordStat, pgDirectInsertProgress, pgDirectUpsertWordBank, pgDirectUpsertModeUsage, pgDirectUpdateTeacherStatus, pgDirectGetStudentHistory, pgGetRoomSessions, pgGetSessionAnswers, pgGetStudentFinishedSessions, pgGetRoomWordStats, pgDirectUpsertLexicon, pgDirectDeleteLexicon, pgGetLexicon, pgCountLexicon, isPG: () => pgReady };

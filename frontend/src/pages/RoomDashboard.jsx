@@ -50,6 +50,17 @@ export default function RoomDashboard() {
   const [loadingDetails, setLoadingDetails] = useState(null); // 正在加载详情的 studentId
   const [exporting, setExporting] = useState(false);
   const navigate = useNavigate();
+  const [lexiconWords, setLexiconWords] = useState(new Set()); // 审定词库词表（小写），用于「4分」标签
+
+  // 拉取审定词库词表，给房间词汇列表中的「4分」词条打标签
+  useEffect(() => {
+    api.getLexiconWords().then(res => {
+      setLexiconWords(new Set((res.items || []).map(i => (i.word || '').trim().toLowerCase())));
+    }).catch(() => {});
+  }, []);
+  function isCurated(word) {
+    return lexiconWords.has((word || '').trim().toLowerCase());
+  }
 
   // 学生提交日期筛选状态
   const [period, setPeriod] = useState('all');
@@ -195,7 +206,10 @@ export default function RoomDashboard() {
               <p className="text-gray-600 mt-1">词汇数：{room.vocabulary_list?.length || 0} | 已加入学生：{students.length} 人</p>
               <div className="flex flex-wrap gap-2 mt-3">
                 {(room.vocabulary_list || []).map((w, i) => (
-                  <span key={i} className="px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-sm">{w}</span>
+                  <span key={i} className="inline-flex items-center gap-1 px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-sm">
+                    {w}
+                    {isCurated(w) && <span className="px-1 py-0.5 rounded bg-pink-100 text-pink-700 text-[10px] font-medium">4分</span>}
+                  </span>
                 ))}
               </div>
               {room.mode_usage && Object.keys(room.mode_usage).length > 0 && (

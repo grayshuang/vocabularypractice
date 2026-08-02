@@ -61,4 +61,10 @@ export default {
   getAllTeachers: () => request('/api/admin/teachers'),
   getAllStudents: () => request('/api/admin/students'),
   updateTeacherStatus: (id, isActive) => request(`/api/admin/teacher/${id}/status`, { method: 'PUT', body: JSON.stringify({ is_active: isActive }) }),
+  // 审定词库（教师/管理员）
+  getLexicon: (q = '') => request(`/api/lexicon${q ? `?q=${encodeURIComponent(q)}` : ''}`),
+  getLexiconWords: () => request('/api/lexicon?minimal=1'),
+  createLexicon: (data) => request('/api/lexicon', { method: 'POST', body: JSON.stringify(data) }),
+  updateLexicon: (id, data) => request(`/api/lexicon/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteLexicon: (id) => request(`/api/lexicon/${id}`, { method: 'DELETE' }),
 };

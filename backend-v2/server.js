@@ -14,7 +14,8 @@ const {
   pgDirectInsertSession, pgDirectUpdateSessionFinish, pgDirectUpdateSessionNote, pgDirectDeleteSession,
   pgDirectInsertAnswer, pgDirectUpsertWordStat, pgDirectInsertProgress,
   pgDirectUpsertWordBank, pgDirectUpsertModeUsage, pgDirectUpdateTeacherStatus,
-  pgDirectGetStudentHistory, pgGetRoomSessions, pgGetSessionAnswers, pgGetStudentFinishedSessions, pgGetRoomWordStats
+  pgDirectGetStudentHistory, pgGetRoomSessions, pgGetSessionAnswers, pgGetStudentFinishedSessions, pgGetRoomWordStats,
+  pgDirectUpsertLexicon, pgDirectDeleteLexicon, pgGetLexicon, pgCountLexicon
 } = require('./database');
 require('dotenv').config();
 
@@ -512,24 +513,76 @@ const COMMON_DISTRACTORS = [
 // 旧版本缓存自动失效，下次请求强制重新 AI 生成干净句子，无需手动清库。
 const CACHE_VERSION = 17;
 
-// ==================== 内置审定词库（lexicon_full.json，来自雅思3-4分词汇PDF） ====================
+// ==================== 内置审定词库（来自雅思3-4分词汇PDF，可在线编辑） ====================
 // 这些词条已由人工/模型审定：definition、3个同义替换、两个例句（易句band3.5 / Part3句band4）、中文翻译齐备。
 // 当房间 lexicon_source === 'curated' 时，题目完全来自该词库，绝不使用 AI 假句兜底。
+// 数据真相在 PostgreSQL 的 lexicon 表；启动时从 lexicon_full.json 种子入库，并载入内存缓存 BUILTIN_LEXICON。
 const BUILTIN_LEXICON = new Map();
-try {
-  const lexPath = path.join(__dirname, 'lexicon_full.json');
-  if (fs.existsSync(lexPath)) {
+
+// 启动兜底：若 PG 暂不可用，至少用静态 JSON 让 curated 模式可用
+function loadLexiconJsonFallback() {
+  try {
+    const lexPath = path.join(__dirname, 'lexicon_full.json');
+    if (fs.existsSync(lexPath)) {
+      const lexArr = JSON.parse(fs.readFileSync(lexPath, 'utf-8'));
+      for (const e of lexArr) {
+        const k = (e.word || '').trim().toLowerCase();
+        if (k) BUILTIN_LEXICON.set(k, e);
+      }
+      console.log('[lexicon] 静态 JSON 兜底已加载，词条数：', BUILTIN_LEXICON.size);
+    }
+  } catch (e) {
+    console.error('[lexicon] 加载 lexicon_full.json 失败：', e.message);
+  }
+}
+
+// 首次部署：若 PG lexicon 表为空，从静态 JSON 种子写入（增量直写，幂等）
+async function ensureLexiconSeeded() {
+  try {
+    const n = await pgCountLexicon();
+    if (n > 0) {
+      console.log('[lexicon] PG 词库已有', n, '条，跳过种子');
+      return;
+    }
+    const lexPath = path.join(__dirname, 'lexicon_full.json');
+    if (!fs.existsSync(lexPath)) {
+      console.warn('[lexicon] 未找到 lexicon_full.json，无法种子');
+      return;
+    }
     const lexArr = JSON.parse(fs.readFileSync(lexPath, 'utf-8'));
     for (const e of lexArr) {
-      const k = (e.word || '').trim().toLowerCase();
-      if (k) BUILTIN_LEXICON.set(k, e);
+      if (!e.word || !e.word.trim()) continue;
+      try {
+        await pgDirectUpsertLexicon(e);
+      } catch (err) {
+        console.error('[lexicon] 种子写入失败', e.word, err.message);
+      }
     }
-    console.log('[lexicon] 内置审定词库已加载，词条数：', BUILTIN_LEXICON.size);
-  } else {
-    console.warn('[lexicon] 未找到 lexicon_full.json，curated 模式将不可用');
+    console.log('[lexicon] 已从 JSON 种子写入', lexArr.length, '条到 PG');
+  } catch (e) {
+    console.error('[lexicon] ensureLexiconSeeded 失败：', e.message);
   }
-} catch (e) {
-  console.error('[lexicon] 加载 lexicon_full.json 失败：', e.message);
+}
+
+// 从 PG 重新载入内存缓存（编辑后也应调用，使 curated 题目反映最新内容）
+async function reloadLexiconCache() {
+  try {
+    const rows = await pgGetLexicon();
+    if (rows && rows.length > 0) {
+      BUILTIN_LEXICON.clear();
+      for (const e of rows) {
+        const k = (e.word || '').trim().toLowerCase();
+        if (k) BUILTIN_LEXICON.set(k, e);
+      }
+      console.log('[lexicon] 已从 PG 载入词库缓存，词条数：', BUILTIN_LEXICON.size);
+    } else {
+      // PG 为空（种子失败等）：用静态 JSON 兜底
+      loadLexiconJsonFallback();
+    }
+  } catch (e) {
+    console.error('[lexicon] reloadLexiconCache 失败，使用静态 JSON 兜底：', e.message);
+    loadLexiconJsonFallback();
+  }
 }
 
 // 不同目标分数对应的句子复杂度指导（注入到 AI 生成 prompt）
@@ -2766,6 +2819,71 @@ app.put('/api/admin/teacher/:id/status', authMiddleware, (req, res) => {
   res.json({ message: '状态已更新' });
 });
 
+// ==================== 审定词库管理（教师 / 管理员） ====================
+// 可在线编辑的"词库 excel"：列表、搜索、新增、修改、删除。数据真相在 PG lexicon 表。
+function lexiconAuth(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: '未登录' });
+  if (req.user.type !== 'teacher' && req.user.type !== 'admin') return res.status(403).json({ error: '无权限' });
+  next();
+}
+
+app.get('/api/lexicon', lexiconAuth, async (req, res) => {
+  try {
+    const q = (req.query.q || '').toString().trim();
+    const minimal = req.query.minimal === '1' || req.query.minimal === 'true';
+    const rows = await pgGetLexicon({ q, minimal });
+    res.json({ items: rows, total: rows.length });
+  } catch (e) {
+    console.error('[lexicon] GET 失败：', e.message);
+    res.status(500).json({ error: '读取词库失败' });
+  }
+});
+
+app.post('/api/lexicon', lexiconAuth, async (req, res) => {
+  try {
+    const e = req.body || {};
+    if (!e.word || !String(e.word).trim()) return res.status(400).json({ error: 'word 不能为空' });
+    const id = await pgDirectUpsertLexicon(e);
+    await reloadLexiconCache();
+    const rows = await pgGetLexicon();
+    const created = rows.find(r => r.id === id) || { id, ...e };
+    res.json({ item: created, message: '已添加' });
+  } catch (e) {
+    console.error('[lexicon] POST 失败：', e.message);
+    res.status(500).json({ error: '添加词条失败：' + e.message });
+  }
+});
+
+app.put('/api/lexicon/:id', lexiconAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'id 无效' });
+    const e = { ...(req.body || {}), id };
+    if (!e.word || !String(e.word).trim()) return res.status(400).json({ error: 'word 不能为空' });
+    await pgDirectUpsertLexicon(e);
+    await reloadLexiconCache();
+    const rows = await pgGetLexicon();
+    const updated = rows.find(r => r.id === id) || { id, ...e };
+    res.json({ item: updated, message: '已保存' });
+  } catch (e) {
+    console.error('[lexicon] PUT 失败：', e.message);
+    res.status(500).json({ error: '保存词条失败：' + e.message });
+  }
+});
+
+app.delete('/api/lexicon/:id', lexiconAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'id 无效' });
+    await pgDirectDeleteLexicon(id);
+    await reloadLexiconCache();
+    res.json({ message: '已删除' });
+  } catch (e) {
+    console.error('[lexicon] DELETE 失败：', e.message);
+    res.status(500).json({ error: '删除词条失败：' + e.message });
+  }
+});
+
 // ==================== 托管前端构建产物（生产部署用） ====================
 // 部署时前端已 build 到 ../frontend/dist，后端单端口同时服务前后端。
 const distDir = path.join(__dirname, '..', 'frontend', 'dist');
@@ -2784,6 +2902,10 @@ if (fs.existsSync(distDir)) {
 (async () => {
   try {
     await initDB();
+    // 词库：首次从 JSON 种子写入 PG，并载入内存缓存（curated 题目依赖此缓存）
+    loadLexiconJsonFallback(); // 先兜底，保证 curated 立即可用
+    await ensureLexiconSeeded();
+    await reloadLexiconCache();
     // 启动后立即验证 PG 模式是否生效
     const { isPG } = require('./database');
     if (isPG()) {
