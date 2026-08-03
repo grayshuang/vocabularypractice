@@ -15,7 +15,7 @@ const {
   pgDirectInsertAnswer, pgDirectUpsertWordStat, pgDirectInsertProgress,
   pgDirectUpsertWordBank, pgDirectUpsertModeUsage, pgDirectUpdateTeacherStatus,
   pgDirectGetStudentHistory, pgGetRoomSessions, pgGetSessionAnswers, pgGetStudentFinishedSessions, pgGetRoomWordStats,
-  pgDirectUpsertLexicon, pgDirectDeleteLexicon, pgGetLexicon, pgCountLexicon
+  pgDirectUpsertLexicon, pgDirectDeleteLexicon, pgGetLexicon, pgCountLexicon, isPG
 } = require('./database');
 require('dotenv').config();
 
@@ -583,6 +583,25 @@ async function reloadLexiconCache() {
     console.error('[lexicon] reloadLexiconCache 失败，使用静态 JSON 兜底：', e.message);
     loadLexiconJsonFallback();
   }
+}
+
+// 强制从 JSON 重新种子（管理员手动触发；UPSERT 幂等，可重复执行，用于在数据库恢复可达后一键补数）
+async function reseedLexiconFromJson() {
+  const lexPath = path.join(__dirname, 'lexicon_full.json');
+  if (!fs.existsSync(lexPath)) throw new Error('未找到 lexicon_full.json');
+  const lexArr = JSON.parse(fs.readFileSync(lexPath, 'utf-8'));
+  let ok = 0;
+  for (const e of lexArr) {
+    if (!e.word || !e.word.trim()) continue;
+    try {
+      await pgDirectUpsertLexicon(e);
+      ok++;
+    } catch (err) {
+      console.error('[lexicon] 重种子失败', e.word, err.message);
+    }
+  }
+  await reloadLexiconCache();
+  return ok;
 }
 
 // 不同目标分数对应的句子复杂度指导（注入到 AI 生成 prompt）
@@ -2888,6 +2907,18 @@ app.delete('/api/lexicon/:id', requireLexiconAdmin, async (req, res) => {
   } catch (e) {
     console.error('[lexicon] DELETE 失败：', e.message);
     res.status(500).json({ error: '删除词条失败：' + e.message });
+  }
+});
+
+// 强制重新种子（管理员手动触发；用于数据库恢复可达后一键补数，UPSERT 幂等）
+app.post('/api/lexicon/reseed', requireLexiconAdmin, async (req, res) => {
+  try {
+    if (!isPG()) return res.status(500).json({ error: '当前未连接 PostgreSQL，无法种子（请检查 Railway 的 DATABASE_URL）' });
+    const ok = await reseedLexiconFromJson();
+    res.json({ ok, message: `已从 JSON 重新写入 ${ok} 条到 PostgreSQL` });
+  } catch (e) {
+    console.error('[lexicon] reseed 失败：', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 
