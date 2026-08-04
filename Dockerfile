@@ -4,6 +4,9 @@ FROM node:22
 
 WORKDIR /app
 
+# 国内 npm 镜像加速（Railway 部署可忽略，国内 ECS 构建必需）
+RUN npm config set registry https://registry.npmmirror.com
+
 # 1) 前端：复制全部源码，安装依赖并构建到 frontend/dist
 COPY frontend/ ./frontend/
 RUN cd frontend && npm install && npx vite build
