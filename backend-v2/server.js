@@ -227,7 +227,14 @@ app.post('/api/room/create', authMiddleware, (req, res) => {
   let lexSrc = lexicon_source || 'ai';
   if (!lexicon_source) {
     const cleaned = (vocabulary_list || []).map(cleanWordEntry).map(s => s.toLowerCase());
-    const allInLexicon = cleaned.length > 0 && cleaned.every(k => BUILTIN_LEXICON.has(k));
+    const allInLexicon = cleaned.length > 0 && cleaned.every(k => {
+      if (BUILTIN_LEXICON.has(k)) return true;
+      // 兜底：匹配词库中文翻译（教师可能输入中文词如"发明"）
+      for (const v of BUILTIN_LEXICON.values()) {
+        if ((v.chinese || '').toLowerCase() === k || (v.chinese || '').includes(k)) return true;
+      }
+      return false;
+    });
     lexSrc = allInLexicon ? 'curated' : 'ai';
   }
   const room = {
@@ -2855,9 +2862,29 @@ function requireLexiconAdmin(req, res, next) {
 
 app.get('/api/lexicon', lexiconAuth, async (req, res) => {
   try {
-    const q = (req.query.q || '').toString().trim();
+    const q = (req.query.q || '').toString().trim().toLowerCase();
     const minimal = req.query.minimal === '1' || req.query.minimal === 'true';
-    const rows = await pgGetLexicon({ q, minimal });
+    let rows = await pgGetLexicon({ q, minimal });
+    // JSON 模式（无 PG）或 PG 返回空时，从内存缓存 BUILTIN_LEXICON 兜底
+    if ((!rows || rows.length === 0) && BUILTIN_LEXICON.size > 0) {
+      const qs = q ? new Set(q.split(/\s+/).filter(Boolean)) : null;
+      for (const [k, v] of BUILTIN_LEXICON) {
+        if (qs) {
+          const hit = [...qs].some(s =>
+            k.includes(s) || (v.chinese || '').toLowerCase().includes(s)
+          );
+          if (!hit) continue;
+        }
+        if (minimal) {
+          rows.push({ id: v.id || k, word: v.word || k });
+          const cn = (v.chinese || '').trim();
+          if (cn && cn.toLowerCase() !== k) rows.push({ id: (v.id || k) + '_cn', word: cn });
+        } else {
+          rows.push(v);
+        }
+      }
+      rows.sort((a, b) => ((a.word || a) || '').localeCompare((b.word || b) || ''));
+    }
     res.json({ items: rows, total: rows.length });
   } catch (e) {
     console.error('[lexicon] GET 失败：', e.message);
