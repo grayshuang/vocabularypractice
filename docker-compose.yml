@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  # ========== PostgreSQL 数据库 ==========
+  db:
+    image: postgres:16-alpine
+    container_name: vocab-db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-vocab_practice_2026}
+      POSTGRES_DB: railway
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ========== 词汇练习后端 + 前端 ==========
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vocab-app
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgresql://postgres:${DB_PASSWORD:-vocab_practice_2026}@db:5432/railway
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
+      JWT_SECRET: ${JWT_SECRET:-vocab-practice-jwt-secret-change-me}
+    ports:
+      - "${APP_PORT:-3000}:3000"
+
+volumes:
+  pgdata:
